@@ -1,0 +1,5 @@
+;!@Install@!UTF-8!
+Title="MeetNow"
+BeginPrompt="Do you want to install MeetNow?"
+RunProgram="Release\setup.exe"
+;!@InstallEnd@!
