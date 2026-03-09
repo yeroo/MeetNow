@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
@@ -9,6 +10,9 @@ namespace MeetNow
 {
     internal static class OutlookHelper
     {
+        [DllImport("oleaut32.dll", PreserveSig = false)]
+        static extern void GetActiveObject([MarshalAs(UnmanagedType.LPStruct)] Guid rclsid, IntPtr pvReserved, [MarshalAs(UnmanagedType.IUnknown)] out object ppunk);
+
         static T InvokeProperty<T>(this object item, string name)
         {
             return (T)item.GetType().InvokeMember(name, BindingFlags.GetProperty, null, item, null);
@@ -42,13 +46,11 @@ namespace MeetNow
                 Recurrent = reccurent,
             };
 
-            if (retVal.Body.Contains("teams.microsoft.com/l/meetup-join"))
+            // Match both old (/l/meetup-join/) and new (/meet/) Teams URL formats
+            var teamsMatch = Regex.Match(retVal.Body, @"https://teams\.microsoft\.com/[^ \t\n\r<>""]+");
+            if (teamsMatch.Success)
             {
-                var match = Regex.Match(retVal.Body, @"https://teams\.microsoft\.com/l/meetup-join/[^ \t\n\r<>"+'"'+@"]+");
-                if (match.Success)
-                {
-                    retVal.TeamsUrl = match.Value;
-                }
+                retVal.TeamsUrl = teamsMatch.Value;
             }
             try
             {
@@ -184,8 +186,21 @@ namespace MeetNow
             else
             {
                 List<TeamsMeeting> retVal = new List<TeamsMeeting>();
-                Type outlookAppType = Type.GetTypeFromProgID("Outlook.Application");
-                object outlookApp = Activator.CreateInstance(outlookAppType);
+                object outlookApp;
+                try
+                {
+                    // First try connecting to already-running Outlook via ROT
+                    Guid outlookClsid = new Guid("0006F03A-0000-0000-C000-000000000046");
+                    GetActiveObject(outlookClsid, IntPtr.Zero, out outlookApp);
+                    Log.Information("Connected to running Outlook via GetActiveObject");
+                }
+                catch
+                {
+                    // Fallback: create via ProgID (connects to running instance for OOP COM)
+                    Type outlookAppType = Type.GetTypeFromProgID("Outlook.Application");
+                    outlookApp = Activator.CreateInstance(outlookAppType);
+                    Log.Information("Connected to Outlook via Activator.CreateInstance");
+                }
                 // Get my name
 
                 var session = InvokeProperty<object>(outlookApp, "Session");
@@ -214,7 +229,6 @@ namespace MeetNow
                 object calendarItems = calendarFolder.InvokeProperty<object>("Items");
                 calendarItems.InvokeMethod2<object>("Sort", "[Start]", Type.Missing);
                 int totalItems = calendarItems.InvokeProperty<int>("Count");
-
                 for (int i = 1; i <= totalItems; i++)
                 {
                     object item = calendarItems.InvokeMethod1<object>("Item", i);

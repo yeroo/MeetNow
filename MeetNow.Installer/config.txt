@@ -1,5 +1,5 @@
 ;!@Install@!UTF-8!
 Title="MeetNow"
 BeginPrompt="Do you want to install MeetNow?"
-RunProgram="Release\setup.exe"
+RunProgram="powershell -ExecutionPolicy Bypass -File \"%%T\\install.ps1\""
 ;!@InstallEnd@!
