@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Configuration;
 using System.Data;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -16,11 +17,14 @@ namespace MeetNow
     /// </summary>
     public partial class App : Application
     {
+        static readonly string InstallDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MeetNow");
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
             var logFolder = Path.GetTempPath();
-           
+
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Information()
                 //.WriteTo.Console()
@@ -31,7 +35,104 @@ namespace MeetNow
             Log.Information("-----------------------");
             Log.Information($"MeetNow Started");
 
-          
+            if (SelfInstallIfNeeded())
+            {
+                Shutdown();
+                return;
+            }
+        }
+
+        /// <summary>
+        /// If not running from the install directory, copies itself there,
+        /// registers Windows startup, creates a desktop shortcut, and relaunches.
+        /// Returns true if install was performed (caller should exit).
+        /// </summary>
+        private bool SelfInstallIfNeeded()
+        {
+            string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
+            if (string.IsNullOrEmpty(currentExe))
+                return false;
+
+            string currentDir = Path.GetDirectoryName(currentExe)!;
+            string installedExe = Path.Combine(InstallDir, "MeetNow.exe");
+
+            // Already running from install directory
+            if (string.Equals(currentDir, InstallDir, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            Log.Information($"Self-installing from {currentDir} to {InstallDir}");
+
+            try
+            {
+                // Create install directory
+                Directory.CreateDirectory(InstallDir);
+
+                // Copy EXE
+                File.Copy(currentExe, installedExe, overwrite: true);
+
+                // Copy SFX folder if it exists next to the current EXE
+                string sfxSource = Path.Combine(currentDir, "SFX");
+                if (Directory.Exists(sfxSource))
+                {
+                    string sfxDest = Path.Combine(InstallDir, "SFX");
+                    Directory.CreateDirectory(sfxDest);
+                    foreach (var file in Directory.GetFiles(sfxSource))
+                    {
+                        File.Copy(file, Path.Combine(sfxDest, Path.GetFileName(file)), overwrite: true);
+                    }
+                }
+
+                // Register Windows startup (HKCU - no admin needed)
+                using var key = Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
+                key?.SetValue("MeetNow", installedExe);
+
+                // Create desktop shortcut
+                CreateDesktopShortcut(installedExe);
+
+                Log.Information("Self-install complete. Launching from install directory.");
+
+                // Launch from installed location
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = installedExe,
+                    UseShellExecute = true
+                });
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Self-install failed");
+                MessageBox.Show(
+                    $"Failed to install MeetNow:\n{ex.Message}\n\nThe app will run from the current location.",
+                    "MeetNow", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return false;
+            }
+        }
+
+        private static void CreateDesktopShortcut(string targetExe)
+        {
+            try
+            {
+                string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                string shortcutPath = Path.Combine(desktopPath, "MeetNow.lnk");
+
+                // Use WScript.Shell COM to create .lnk
+                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return;
+                dynamic shell = Activator.CreateInstance(shellType)!;
+                dynamic shortcut = shell.CreateShortcut(shortcutPath);
+                shortcut.TargetPath = targetExe;
+                shortcut.WorkingDirectory = Path.GetDirectoryName(targetExe);
+                shortcut.IconLocation = targetExe + ",0";
+                shortcut.Description = "MeetNow - Teams Meeting Popup";
+                shortcut.Save();
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Could not create desktop shortcut");
+            }
         }
     }
 }
