@@ -67,20 +67,8 @@ namespace MeetNow
                 // Create install directory
                 Directory.CreateDirectory(InstallDir);
 
-                // Copy EXE
+                // Copy EXE (SFX audio is embedded as a resource)
                 File.Copy(currentExe, installedExe, overwrite: true);
-
-                // Copy SFX folder if it exists next to the current EXE
-                string sfxSource = Path.Combine(currentDir, "SFX");
-                if (Directory.Exists(sfxSource))
-                {
-                    string sfxDest = Path.Combine(InstallDir, "SFX");
-                    Directory.CreateDirectory(sfxDest);
-                    foreach (var file in Directory.GetFiles(sfxSource))
-                    {
-                        File.Copy(file, Path.Combine(sfxDest, Path.GetFileName(file)), overwrite: true);
-                    }
-                }
 
                 // Register Windows startup (HKCU - no admin needed)
                 using var key = Registry.CurrentUser.OpenSubKey(

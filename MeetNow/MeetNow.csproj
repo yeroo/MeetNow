@@ -40,10 +40,7 @@
     <None Update="MeetNow.ico">
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
     </None>
-    <None Update="SFX\big_ben_2013.mp3">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
-    </None>
+    <EmbeddedResource Include="SFX\big_ben_2013.mp3" />
   </ItemGroup>
 
 </Project>
