@@ -23,12 +23,30 @@ namespace MeetNow
         private static readonly List<PopupEventsWindow> _windows = new();
         public static void CloseAllWindows()
         {
+            VolumeMonitor.Stop();
             if (_windows.Count > 0)
             {
                 _windows.ForEach(w => w.Close());
                 _windows.Clear();
             }
             SfxHelper.StopAllDevices();
+        }
+
+        public static void JoinFirstMeeting()
+        {
+            if (_windows.Count == 0)
+                return;
+
+            var meetings = _windows[0].GetTeamsMeetings();
+            if (meetings != null && meetings.Length > 0)
+            {
+                var teamsUrl = meetings[0].TeamsUrl;
+                if (!string.IsNullOrEmpty(teamsUrl))
+                {
+                    OutlookHelper.StartTeamsMeeting(teamsUrl);
+                }
+            }
+            CloseAllWindows();
         }
         public static void Show(TeamsMeeting[] events)
         {
@@ -50,6 +68,7 @@ namespace MeetNow
                 window.Focus();
             }
             SfxHelper.PlayOnAllDevices();
+            VolumeMonitor.Start();
         }
         public PopupEventsWindow()
         {

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(powershell:*)",
+      "Bash(taskkill:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(dotnet publish:*)",
+      "Bash(cmd:*)",
+      "Bash(rm:*)",
+      "Bash(\"C:/Program Files/7-Zip/7z.exe\" l:*)",
+      "Read(//c/Users/Boris.Kudriashov/**)",
+      "Bash(powershell -Command \"[Environment]::GetFolderPath\\(''Desktop''\\)\")",
+      "Bash(cd \"C:\\\\Users\\\\Boris.Kudriashov\\\\Source\\\\repos\\\\MeetNow\" && gh auth status 2>&1)"
+    ]
+  }
+}
