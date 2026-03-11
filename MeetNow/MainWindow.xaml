@@ -14,6 +14,8 @@
         <tb:TaskbarIcon x:Name="tb" IconSource="/Icons/MeetNow.ico">
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
+                    <MenuItem Header="Messages" Click="MenuItem_MessagesClick" FontWeight="Bold"/>
+                    <Separator/>
                     <MenuItem Header="Exit" Click="MenuItem_ExitAppClick"/>
                 </ContextMenu>
             </tb:TaskbarIcon.ContextMenu>

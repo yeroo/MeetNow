@@ -1,4 +1,5 @@
 ﻿using FluentScheduler;
+using MeetNow.Models;
 using Microsoft.Win32;
 using Serilog;
 using System;
@@ -32,6 +33,9 @@ namespace MeetNow
     {
         const int OUTLOOK_TIMER_INTERVAL_MINUTES = 15;
         private Timer _timer;
+        private TeamsMessageMonitor? _teamsMonitor;
+        private NotificationListenerMonitor? _notificationMonitor;
+        private UrgencyClassifier? _urgencyClassifier;
 
         internal MainWindowModel Model
         {
@@ -46,6 +50,7 @@ namespace MeetNow
             JobManager.Initialize();
             InitializeComponent();
             SetupTimer();
+            StartTeamsMonitor();
             SystemEvents.PowerModeChanged += OnPowerChange;
 #if DEBUG
             var contextMenu = tb.ContextMenu;
@@ -71,6 +76,11 @@ namespace MeetNow
             test4MenuItem.Click += Test4MenuItem_Click;
 
 
+            // MenuItem: test Teams message popup
+            var test5MenuItem = new MenuItem();
+            test5MenuItem.Header = "Test Teams message popup";
+            test5MenuItem.Click += Test5MenuItem_Click;
+
             // MenuItem: separator
             var separator = new Separator();
 
@@ -78,7 +88,8 @@ namespace MeetNow
             contextMenu.Items.Insert(1, test2MenuItem);
             contextMenu.Items.Insert(2, test3MenuItem);
             contextMenu.Items.Insert(3, test4MenuItem);
-            contextMenu.Items.Insert(4, separator);
+            contextMenu.Items.Insert(4, test5MenuItem);
+            contextMenu.Items.Insert(5, separator);
 #endif
         }
         private void OnPowerChange(object sender, PowerModeChangedEventArgs e)
@@ -107,13 +118,92 @@ namespace MeetNow
             RefreshOutlookWithRetry();
         }
 
+        private void StartTeamsMonitor()
+        {
+            try
+            {
+                var githubToken = Environment.GetEnvironmentVariable("MEETNOW_GITHUB_TOKEN")
+                    ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                    ?? "";
+
+                if (!string.IsNullOrEmpty(githubToken))
+                {
+                    _urgencyClassifier = new UrgencyClassifier(githubToken);
+                    Log.Information("Urgency classifier enabled (GitHub Models API)");
+                }
+                else
+                {
+                    Log.Information("No MEETNOW_GITHUB_TOKEN set - using rule-based urgency classification");
+                }
+
+                var username = Model.Username ?? Environment.UserName;
+
+                _notificationMonitor = new NotificationListenerMonitor(username);
+                _notificationMonitor.NewMessageDetected += OnTeamsMessageDetected;
+                if (_notificationMonitor.Start())
+                {
+                    Log.Information("Teams monitor: using Win32 accessibility hooks for toast detection");
+                }
+
+                _teamsMonitor = new TeamsMessageMonitor(username);
+                _teamsMonitor.NewMessageDetected += OnTeamsMessageDetected;
+                if (_teamsMonitor.Start())
+                {
+                    Log.Information("Teams monitor: LevelDB polling active as supplement");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to start Teams message monitor");
+            }
+        }
+
+        private async void OnTeamsMessageDetected(TeamsMessage message)
+        {
+            try
+            {
+                if (_urgencyClassifier != null)
+                {
+                    var (urgency, reason) = await _urgencyClassifier.ClassifyAsync(message);
+                    message.Urgency = urgency;
+                    message.UrgencyReason = reason;
+                }
+                else
+                {
+                    var (urgency, reason) = LocalUrgencyClassifier.Classify(message);
+                    message.Urgency = urgency;
+                    message.UrgencyReason = reason;
+                }
+
+                Log.Information("Message urgency: {Urgency} ({Reason})", message.Urgency, message.UrgencyReason);
+                MessageSummaryWindow.AddMessage(message);
+
+                if (message.Urgency != MessageUrgency.Low)
+                {
+                    TeamsMessagePopupWindow.ShowMessage(message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error handling Teams message");
+            }
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
             _timer.Dispose();
+            _notificationMonitor?.Dispose();
+            _teamsMonitor?.Dispose();
+            _urgencyClassifier?.Dispose();
             JobManager.StopAndBlock();
             Application.Current.Shutdown();
             Log.Information("Application closed");
+        }
+
+        private void MenuItem_MessagesClick(object sender, RoutedEventArgs e)
+        {
+            MessageSummaryWindow.ShowWindow();
         }
 
         private void MenuItem_ExitAppClick(object sender, RoutedEventArgs e)
@@ -308,6 +398,23 @@ namespace MeetNow
 
                 RunPowershellCommand($"Get-Content '{currentLogFilePath}' -Wait -Tail 50");
             }
+        }
+        private void Test5MenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var testMessage = new TeamsMessage
+            {
+                Id = "test_" + DateTime.Now.Ticks,
+                Sender = "Doe, John TESTORG/IT",
+                Content = "Hey, are you available? We have a production issue with the deployment pipeline and need your help ASAP.",
+                Timestamp = DateTime.Now,
+                ThreadType = "chat",
+                IsMention = true,
+                MentionedNames = new[] { "Kudriashov" },
+                Urgency = MessageUrgency.Urgent,
+                UrgencyReason = "Direct message requesting immediate help with production issue"
+            };
+
+            TeamsMessagePopupWindow.ShowMessage(testMessage);
         }
         private void RunPowershellCommand(string command)
         {

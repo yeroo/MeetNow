@@ -35,11 +35,13 @@ namespace MeetNow
             Log.Information("-----------------------");
             Log.Information($"MeetNow Started");
 
+#if !DEBUG
             if (SelfInstallIfNeeded())
             {
                 Shutdown();
                 return;
             }
+#endif
         }
 
         /// <summary>
