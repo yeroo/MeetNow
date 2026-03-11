@@ -9,7 +9,7 @@ namespace MeetNow
         {
             if (value != null)
             {
-                string[] words = value.ToString().Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                string[] words = value.ToString()!.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                 string result = string.Empty;
                 foreach (string word in words) { result += word[0]; }
                 return result.Length>2?result.Substring(0,2):result;

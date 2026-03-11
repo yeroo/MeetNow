@@ -75,7 +75,7 @@ namespace MeetNow
             InitializeComponent();
         }
 
-        TeamsMeeting[] _teamsMeetings;
+        TeamsMeeting[]? _teamsMeetings;
         public void SetTeamsMeetings(TeamsMeeting[] teamsMeetings)
         {
             _teamsMeetings = teamsMeetings;
@@ -84,7 +84,7 @@ namespace MeetNow
                 DivideRectangle(canvas, _teamsMeetings.Count());
             }
         }
-        public TeamsMeeting[] GetTeamsMeetings()
+        public TeamsMeeting[]? GetTeamsMeetings()
         {
             return _teamsMeetings;
         }
@@ -139,7 +139,7 @@ namespace MeetNow
                     };
                     var child = new TeamsMeetingControl()
                     {
-                        DataContext = _teamsMeetings[i * bestCols + j]
+                        DataContext = _teamsMeetings![i * bestCols + j]
                     };
                     piece.Child = child;
                    

@@ -9,8 +9,8 @@ namespace MeetNow
 {
     internal class TeamsMeetingControlModel : INotifyPropertyChanged
     {
-        public event PropertyChangedEventHandler PropertyChanged;
-        private string _username;
+        public event PropertyChangedEventHandler? PropertyChanged;
+        private string _username = "";
         public string Username
         {
             get => _username; set
@@ -22,7 +22,7 @@ namespace MeetNow
                 }
             }
         }
-        private TeamsMeeting _teamsMeeting;
+        private TeamsMeeting _teamsMeeting = new();
         public TeamsMeeting TeamsMeeting
         {
             get => _teamsMeeting; set

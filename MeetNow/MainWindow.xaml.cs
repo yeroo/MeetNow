@@ -32,14 +32,14 @@ namespace MeetNow
     public partial class MainWindow : Window
     {
         const int OUTLOOK_TIMER_INTERVAL_MINUTES = 15;
-        private Timer _timer;
+        private Timer _timer = null!;
         private TeamsMessageMonitor? _teamsMonitor;
         private NotificationListenerMonitor? _notificationMonitor;
         private UrgencyClassifier? _urgencyClassifier;
 
         internal MainWindowModel Model
         {
-            get => DataContext as MainWindowModel;
+            get => (DataContext as MainWindowModel)!;
             private set => DataContext = value;
         }
 
@@ -227,25 +227,59 @@ namespace MeetNow
             try
             {
                 Log.Information("Refreshing Outlook");
-                bool isOutlookRunning = false;
-                // Detect if Outlook is running
+                var now = DateTime.Now;
+                string username = Dispatcher.Invoke(() => Model.Username) ?? Environment.UserName;
+
+                // Collect meetings from both sources
+                var cacheMeetings = Array.Empty<TeamsMeeting>();
+                var comMeetings = Array.Empty<TeamsMeeting>();
+
+                // Source 1: New Outlook local cache (no COM needed)
                 try
                 {
-                    Process[] proc = Process.GetProcessesByName("OUTLOOK");
-                    if (proc.Length > 0)
+                    cacheMeetings = OutlookCacheReader.GetTodaysMeetings(now);
+                    Log.Information("Cache source: {Count} meetings", cacheMeetings.Length);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Error reading Outlook cache");
+                }
+
+                // Source 2: Outlook COM (classic Outlook)
+                try
+                {
+                    bool isOutlookRunning = Process.GetProcessesByName("OUTLOOK").Length > 0;
+                    if (isOutlookRunning)
                     {
-                        isOutlookRunning = true;
+                        (comMeetings, username) = OutlookHelper.GetTeamsMeetings(now, debug);
+                        Log.Information("COM source: {Count} meetings", comMeetings.Length);
                     }
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(ex, "There is an exception!");
+                    Log.Debug(ex, "Outlook COM not available");
                 }
-                if (isOutlookRunning)
+
+                // Merge and deduplicate: prefer cache (richer data from new Outlook),
+                // then add COM meetings that don't overlap
+                var meetings = MergeMeetings(cacheMeetings, comMeetings);
+
+                if (meetings.Length == 0)
                 {
-                    // If outlook is running - continue
-                    var now = DateTime.Now;
-                    (var meetings, var username) = OutlookHelper.GetTeamsMeetings(now, debug);
+                    Log.Information("No meetings found from any source");
+                    if (!_IsOutlookRunningMessageBoxShown)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            MessageBox.Show("Please start Outlook to use this application", "Outlook is not running", MessageBoxButton.OK, MessageBoxImage.Information);
+                        });
+                        _IsOutlookRunningMessageBoxShown = true;
+                    }
+                    return false;
+                }
+
+                if (meetings.Length > 0)
+                {
                     meetings = meetings.OrderBy(m => m.Start).ToArray();
                     Dispatcher.Invoke(() =>
                     {
@@ -322,22 +356,9 @@ namespace MeetNow
                             tb.ContextMenu.Items.Insert(contextMenuNum, separator);
                             _scheduledPopupMenuItems.Add(separator);
                         });
-                    return true;
-                }
-                else
-                {
-                    Log.Information("Outlook is not running");
-                    if (!_IsOutlookRunningMessageBoxShown)
-                    {
-                        Dispatcher.Invoke(() =>
-                        {
-                            MessageBox.Show("Please start Outlook to use this application", "Outlook is not running", MessageBoxButton.OK, MessageBoxImage.Information);
-                        });
-                        _IsOutlookRunningMessageBoxShown = true;
-                    }
-                    return false;
                 }
 
+                return true;
             }
             catch (Exception ex)
             {
@@ -361,6 +382,30 @@ namespace MeetNow
         public static void SchedulePopupClose(DateTime startTime)
         {
             JobManager.AddJob(new EventClosePopupJob(), s => s.ToRunOnceAt(startTime));
+        }
+
+        /// <summary>
+        /// Merges meetings from two sources, deduplicating by Subject + Start time.
+        /// Primary source (cache) takes precedence; secondary (COM) fills gaps.
+        /// </summary>
+        private static TeamsMeeting[] MergeMeetings(TeamsMeeting[] primary, TeamsMeeting[] secondary)
+        {
+            if (secondary.Length == 0) return primary;
+            if (primary.Length == 0) return secondary;
+
+            var merged = new List<TeamsMeeting>(primary);
+            var seenKeys = new HashSet<string>(
+                primary.Select(m => $"{m.Subject?.Trim()}|{m.Start:HH:mm}"),
+                StringComparer.OrdinalIgnoreCase);
+
+            foreach (var m in secondary)
+            {
+                string key = $"{m.Subject?.Trim()}|{m.Start:HH:mm}";
+                if (seenKeys.Add(key))
+                    merged.Add(m);
+            }
+
+            return merged.OrderBy(m => m.Start).ToArray();
         }
 
         private void Test1MenuItem_Click(object sender, RoutedEventArgs e)

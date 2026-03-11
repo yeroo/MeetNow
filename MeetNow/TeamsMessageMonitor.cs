@@ -35,7 +35,6 @@ namespace MeetNow
         private delegate void WinEventDelegate(
             IntPtr hWinEventHook, uint eventType, IntPtr hwnd,
             int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
-        private WinEventDelegate? _winEventDelegate;
         private IntPtr _hookHandle;
 
         [DllImport("user32.dll")]

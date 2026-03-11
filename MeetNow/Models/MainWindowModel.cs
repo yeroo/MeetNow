@@ -10,10 +10,10 @@ namespace MeetNow
 {
     internal class MainWindowModel : INotifyPropertyChanged
     {
-        public event PropertyChangedEventHandler PropertyChanged;
+        public event PropertyChangedEventHandler? PropertyChanged;
 
-        private string _username;
-        public string Username
+        private string? _username;
+        public string? Username
         {
             get => _username; set
             {
