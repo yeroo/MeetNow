@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 
 namespace MeetNow
@@ -21,6 +22,7 @@ namespace MeetNow
             DataContext = this;
             UpdateEmptyState();
             _messages.CollectionChanged += (_, _) => UpdateEmptyState();
+            MessageList.ContextMenuOpening += MessageList_ContextMenuOpening;
         }
 
         public static void AddMessage(TeamsMessage msg)
@@ -43,14 +45,11 @@ namespace MeetNow
                 if (_instance == null || !_instance.IsLoaded)
                 {
                     _instance = new MessageSummaryWindow();
-                    _instance.Show();
                 }
-                else
-                {
-                    _instance.Activate();
-                    if (_instance.WindowState == WindowState.Minimized)
-                        _instance.WindowState = WindowState.Normal;
-                }
+                _instance.Show();
+                _instance.Activate();
+                if (_instance.WindowState == WindowState.Minimized)
+                    _instance.WindowState = WindowState.Normal;
             });
         }
 
@@ -67,6 +66,80 @@ namespace MeetNow
         private void ClearClick(object sender, RoutedEventArgs e)
         {
             _messages.Clear();
+        }
+
+        private void MessageList_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            // Find the ListBoxItem that was right-clicked
+            if (e.OriginalSource is not DependencyObject source) return;
+            var listBoxItem = FindParent<ListBoxItem>(source);
+            if (listBoxItem == null) return;
+            if (listBoxItem.DataContext is not MessageViewModel vm) return;
+
+            var contextMenu = listBoxItem.ContextMenu;
+            if (contextMenu == null) return;
+
+            var current = ContactPriorityProvider.GetPriority(vm.Sender);
+
+            if (contextMenu.Items[0] is MenuItem parentMenu)
+            {
+                foreach (var item in parentMenu.Items)
+                {
+                    if (item is not MenuItem mi || mi.Tag is not string tag) continue;
+
+                    var itemPriority = tag switch
+                    {
+                        "Urgent" => ContactPriorityProvider.ContactPriority.Urgent,
+                        "Normal" => ContactPriorityProvider.ContactPriority.Normal,
+                        "Low" => ContactPriorityProvider.ContactPriority.Low,
+                        _ => ContactPriorityProvider.ContactPriority.Default
+                    };
+                    mi.IsChecked = itemPriority == current;
+
+                    // Wire up click handler (remove first to avoid duplicates)
+                    mi.Click -= SetPriority_Click;
+                    mi.Click += SetPriority_Click;
+                }
+            }
+        }
+
+        private void SetPriority_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not MenuItem menuItem) return;
+            if (menuItem.Tag is not string priorityStr) return;
+
+            // Walk up logical tree to find the ContextMenu
+            DependencyObject? parent = menuItem;
+            ContextMenu? contextMenu = null;
+            while (parent != null)
+            {
+                if (parent is ContextMenu cm) { contextMenu = cm; break; }
+                parent = LogicalTreeHelper.GetParent(parent);
+            }
+
+            if (contextMenu?.PlacementTarget is not FrameworkElement fe) return;
+            if (fe.DataContext is not MessageViewModel vm) return;
+
+            var priority = priorityStr switch
+            {
+                "Urgent" => ContactPriorityProvider.ContactPriority.Urgent,
+                "Normal" => ContactPriorityProvider.ContactPriority.Normal,
+                "Low" => ContactPriorityProvider.ContactPriority.Low,
+                _ => ContactPriorityProvider.ContactPriority.Default
+            };
+
+            ContactPriorityProvider.SetPriority(vm.Sender, priority);
+        }
+
+        private static T? FindParent<T>(DependencyObject child) where T : DependencyObject
+        {
+            var current = VisualTreeHelper.GetParent(child);
+            while (current != null)
+            {
+                if (current is T found) return found;
+                current = VisualTreeHelper.GetParent(current);
+            }
+            return null;
         }
 
         protected override void OnClosing(CancelEventArgs e)

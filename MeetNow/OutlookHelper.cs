@@ -294,18 +294,18 @@ namespace MeetNow
 
         internal static void StartTeamsMeeting(string teamsUrl)
         {
-            if (!string.IsNullOrEmpty(teamsUrl))
+            if (string.IsNullOrEmpty(teamsUrl)) return;
+
+            // Use the HTTPS URL directly — new Teams 2.0 handles it via the browser redirect
+            // which triggers the ms-teams: protocol handler correctly.
+            // The msteams: protocol conversion doesn't work reliably with new Teams.
+            var launchUrl = teamsUrl;
+            Log.Information("Opening Teams meeting: {Url}", launchUrl);
+            Process.Start(new ProcessStartInfo
             {
-                // Open Teams meeting URL
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "cmd",
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true,
-                    Arguments = $"/c start {teamsUrl}"
-                });
-            }
+                FileName = launchUrl,
+                UseShellExecute = true
+            });
         }
 
     }

@@ -15,6 +15,9 @@
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
                     <MenuItem Header="Messages" Click="MenuItem_MessagesClick" FontWeight="Bold"/>
+                    <MenuItem Header="Autopilot" Click="MenuItem_AutopilotClick"/>
+                    <MenuItem Header="Clear Queue" Click="MenuItem_ClearQueueClick"/>
+                    <MenuItem Header="Settings" Click="MenuItem_SettingsClick"/>
                     <Separator/>
                     <MenuItem Header="Exit" Click="MenuItem_ExitAppClick"/>
                 </ContextMenu>

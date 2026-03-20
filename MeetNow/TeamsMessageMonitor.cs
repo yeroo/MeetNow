@@ -322,7 +322,11 @@ namespace MeetNow
                 _lastLogFileSize = currentSize;
 
                 var messages = ParseMessages(newData);
-                Log.Information("Parsed {Count} messages from LevelDB delta", messages.Count);
+                Log.Information("Parsed {Count} messages from LevelDB delta (raw bytes sample: {Sample})",
+                    messages.Count,
+                    messages.Count == 0 && newData.Length > 0
+                        ? Encoding.UTF8.GetString(newData, 0, Math.Min(500, newData.Length)).Replace("\0", "·").Replace("\n", "\\n").Replace("\r", "")
+                        : "n/a");
 
                 foreach (var msg in messages)
                 {
@@ -464,6 +468,9 @@ namespace MeetNow
             var text = Encoding.UTF8.GetString(data);
 
             var timestamps = TimestampPattern.Matches(text);
+            int skippedOld = 0, skippedOwnMsg = 0;
+            Log.Debug("LevelDB delta: {Len} bytes, found {Count} composetime timestamps", data.Length, timestamps.Count);
+
             foreach (Match tsMatch in timestamps)
             {
                 var timestamp = tsMatch.Groups[1].Value;
@@ -473,7 +480,10 @@ namespace MeetNow
 
                 // Skip old messages (more than 5 minutes ago)
                 if (dt.ToLocalTime() < DateTime.Now.AddMinutes(-5))
+                {
+                    skippedOld++;
                     continue;
+                }
 
                 int searchStart = Math.Max(0, tsMatch.Index - 3000);
                 int searchEnd = Math.Min(text.Length, tsMatch.Index + 2000);
@@ -481,7 +491,10 @@ namespace MeetNow
 
                 // Skip if this is our own message
                 if (IsLastFromMePattern.IsMatch(chunk))
+                {
+                    skippedOwnMsg++;
                     continue;
+                }
 
                 // Extract sender - try imdisplayname first, then fromDisplayNameInToken
                 var senderMatch = SenderPattern.Match(chunk);
@@ -534,10 +547,115 @@ namespace MeetNow
                     });
                 }
             }
+
+            if (messages.Count == 0 && timestamps.Count > 0)
+                Log.Information("LevelDB parse stats: {Total} timestamps, {Old} too old, {Own} own messages",
+                    timestamps.Count, skippedOld, skippedOwnMsg);
+
             return messages;
         }
 
         #endregion
+
+        // Pattern to extract person display names from Teams chat list entries.
+        // Chat list entries have profile picture URLs: orgid:<guid>?displayname=<url-encoded-name>&
+        private static readonly Regex ChatContactPattern = new(
+            @"orgid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\?displayname=([^&]+)&",
+            RegexOptions.Compiled);
+
+        /// <summary>
+        /// Scans Teams LevelDB files (.log and .ldb) to extract recent chat contact names.
+        /// Uses two strategies:
+        /// 1. Chat list entries with profile picture URLs containing displayname (from .log and .ldb)
+        /// 2. Message records with imdisplayname/composetime (from .log only)
+        /// Returns up to 30 unique contacts sorted by most recently seen.
+        /// </summary>
+        public static List<(string Name, DateTime LastSeen)> GetRecentContacts()
+        {
+            var dbPath = GetLevelDbPath();
+            var contacts = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+
+            if (!Directory.Exists(dbPath))
+            {
+                Log.Warning("LevelDB path not found for recent contacts: {Path}", dbPath);
+                return new List<(string, DateTime)>();
+            }
+
+            try
+            {
+                // Scan all .ldb and .log files
+                var files = Directory.GetFiles(dbPath, "*.ldb")
+                    .Concat(Directory.GetFiles(dbPath, "*.log"))
+                    .ToArray();
+
+                foreach (var file in files)
+                {
+                    try
+                    {
+                        byte[] data;
+                        using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                        {
+                            data = new byte[fs.Length];
+                            fs.Read(data, 0, data.Length);
+                        }
+
+                        var text = Encoding.UTF8.GetString(data);
+
+                        // Strategy 1: Extract from chat list profile picture URLs (orgid?displayname=...)
+                        foreach (Match m in ChatContactPattern.Matches(text))
+                        {
+                            var name = Uri.UnescapeDataString(m.Groups[1].Value).Trim();
+                            if (name.Length < 3) continue;
+                            if (!contacts.ContainsKey(name))
+                                contacts[name] = DateTime.MinValue;
+                        }
+
+                        // Strategy 2: Extract from message records (composetime + imdisplayname) — .log files
+                        if (file.EndsWith(".log", StringComparison.OrdinalIgnoreCase))
+                        {
+                            foreach (Match tsMatch in TimestampPattern.Matches(text))
+                            {
+                                if (!DateTime.TryParse(tsMatch.Groups[1].Value, CultureInfo.InvariantCulture,
+                                    DateTimeStyles.RoundtripKind, out var dt))
+                                    continue;
+
+                                int searchStart = Math.Max(0, tsMatch.Index - 3000);
+                                int searchEnd = Math.Min(text.Length, tsMatch.Index + 2000);
+                                var chunk = text[searchStart..searchEnd];
+
+                                var senderMatch = SenderPattern.Match(chunk);
+                                if (!senderMatch.Success)
+                                    senderMatch = SenderTokenPattern.Match(chunk);
+                                if (!senderMatch.Success) continue;
+
+                                string sender = senderMatch.Groups[1].Value.Trim();
+                                if (string.IsNullOrWhiteSpace(sender) || sender.Length < 2) continue;
+
+                                var localTime = dt.ToLocalTime();
+                                if (!contacts.TryGetValue(sender, out var existing) || localTime > existing)
+                                    contacts[sender] = localTime;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Debug(ex, "Error reading LevelDB file for contacts: {File}", Path.GetFileName(file));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error scanning LevelDB for recent contacts");
+            }
+
+            // Sort: contacts with timestamps first (most recent), then alphabetically
+            return contacts
+                .OrderByDescending(kvp => kvp.Value)
+                .ThenBy(kvp => kvp.Key)
+                .Take(30)
+                .Select(kvp => (kvp.Key, kvp.Value))
+                .ToList();
+        }
 
         public void Dispose()
         {

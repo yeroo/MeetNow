@@ -6,58 +6,37 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 
 namespace MeetNow
 {
     internal static class SfxHelper
     {
         static List<DirectSoundOut> playbacks = new();
-        const string CHIME_RESOURCE = "MeetNow.SFX.big_ben_2013.mp3";
-        static string? _cachedChimePath;
-
-        /// <summary>
-        /// Extracts the embedded chime to a temp file (once) and returns the path.
-        /// </summary>
-        static string? GetChimePath()
-        {
-            if (_cachedChimePath != null && File.Exists(_cachedChimePath))
-                return _cachedChimePath;
-
-            try
-            {
-                using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(CHIME_RESOURCE);
-                if (stream == null)
-                {
-                    Log.Information("Embedded resource {Resource} not found", CHIME_RESOURCE);
-                    return null;
-                }
-
-                var tempPath = Path.Combine(Path.GetTempPath(), "MeetNow_chime.mp3");
-                using var fileStream = File.Create(tempPath);
-                stream.CopyTo(fileStream);
-                _cachedChimePath = tempPath;
-                return _cachedChimePath;
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Failed to extract chime resource");
-                return null;
-            }
-        }
+        private const string PROXIMITY_SOUND = @"C:\Windows\Media\Windows Proximity Notification.wav";
 
         public static void PlayOnAllDevices()
         {
-            var soundfile = GetChimePath();
-            if (soundfile == null)
+            var soundFile = File.Exists(PROXIMITY_SOUND)
+                ? PROXIMITY_SOUND
+                : @"C:\Windows\Media\Windows Notify Calendar.wav"; // fallback
+            if (!File.Exists(soundFile))
+            {
+                Log.Warning("No notification sound found");
                 return;
+            }
+            PlayFileOnAllDevices(soundFile);
+        }
+
+        public static void PlayFileOnAllDevices(string audioFilePath)
+        {
+            if (!File.Exists(audioFilePath)) return;
 
             var enumerator = new MMDeviceEnumerator();
             var devices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
 
             foreach (var device in devices)
             {
-                PlayOnDevice(device, soundfile);
+                PlayOnDevice(device, audioFilePath);
             }
         }
         public static void StopAllDevices()

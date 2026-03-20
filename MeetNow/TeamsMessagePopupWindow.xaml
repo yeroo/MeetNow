@@ -1,26 +1,25 @@
 <Window x:Class="MeetNow.TeamsMessagePopupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d"
         Title="Teams Message"
-        Width="420" Height="220"
+        Width="420" MinHeight="140" MaxHeight="500"
+        SizeToContent="Height"
         WindowStyle="None" AllowsTransparency="True"
         Background="Transparent"
         Topmost="True" ShowInTaskbar="False"
         ResizeMode="NoResize">
     <Window.Resources>
         <Style x:Key="DismissButton" TargetType="Button">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#999"/>
+            <Setter Property="Background" Value="#D13438"/>
+            <Setter Property="Foreground" Value="White"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="3" Padding="6,2">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="16,6">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                     </ControlTemplate>
@@ -28,63 +27,72 @@
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#3D3D3D"/>
+                    <Setter Property="Background" Value="#E8484C"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
     </Window.Resources>
-    <Border Background="#2D2D2D" CornerRadius="8" BorderBrush="#444" BorderThickness="1"
+    <Border Background="#2D2D2D" CornerRadius="8" BorderBrush="#D13438" BorderThickness="2"
             Margin="8">
         <Border.Effect>
             <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.5"/>
         </Border.Effect>
-        <Grid Margin="16">
+        <Grid Margin="14">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- Header: Urgency badge + dismiss -->
-            <DockPanel Grid.Row="0">
-                <Border x:Name="UrgencyBadge" CornerRadius="3" Padding="8,3" DockPanel.Dock="Left"
+            <!-- Header -->
+            <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                <Border CornerRadius="3" Padding="8,3" DockPanel.Dock="Left"
                         Background="#D13438" VerticalAlignment="Center">
-                    <TextBlock x:Name="UrgencyText" Text="URGENT" Foreground="White"
+                    <TextBlock Text="URGENT" Foreground="White"
                                FontSize="11" FontWeight="Bold"/>
                 </Border>
-                <TextBlock x:Name="TimeText" Text="" Foreground="#888" FontSize="11"
+                <TextBlock x:Name="MessageCountText" Text="" Foreground="#888" FontSize="11"
                            VerticalAlignment="Center" Margin="10,0,0,0"/>
-                <Button Content="X" Style="{StaticResource DismissButton}"
-                        DockPanel.Dock="Right" HorizontalAlignment="Right"
-                        Click="DismissClick"/>
             </DockPanel>
 
-            <!-- Sender -->
-            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,10,0,4">
-                <Grid Width="32" Height="32" Margin="0,0,8,0">
-                    <Ellipse Fill="#4F52B2"/>
-                    <TextBlock x:Name="SenderInitials" Text="AB" Foreground="White"
-                               FontSize="13" FontWeight="SemiBold"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Grid>
-                <StackPanel VerticalAlignment="Center">
-                    <TextBlock x:Name="SenderName" Text="Sender Name" Foreground="#F0F0F0"
-                               FontSize="14" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="ChatType" Text="Direct message" Foreground="#888" FontSize="11"/>
-                </StackPanel>
-            </StackPanel>
+            <!-- Scrollable message stack -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="340">
+                <ItemsControl x:Name="MessageStack">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="#222" CornerRadius="5" Padding="10,8" Margin="0,0,0,4">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="36"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid Grid.Column="0" Width="28" Height="28" VerticalAlignment="Top">
+                                        <Ellipse Fill="#4F52B2"/>
+                                        <TextBlock Text="{Binding Initials}" Foreground="White"
+                                                   FontSize="11" FontWeight="SemiBold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <StackPanel Grid.Column="1" Margin="4,0,4,0">
+                                        <TextBlock Text="{Binding Sender}" Foreground="#F0F0F0"
+                                                   FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Content}" Foreground="#AAA"
+                                                   FontSize="12" TextWrapping="Wrap" MaxHeight="40"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="2" Text="{Binding TimeStr}" Foreground="#888"
+                                               FontSize="10" VerticalAlignment="Top"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
 
-            <!-- Message content -->
-            <TextBlock Grid.Row="2" x:Name="MessageContent" Text="Message content here..."
-                       Foreground="#CCC" FontSize="13" TextWrapping="Wrap"
-                       MaxHeight="60" TextTrimming="CharacterEllipsis"
-                       Margin="0,6,0,0"/>
-
-            <!-- Urgency reason -->
-            <TextBlock Grid.Row="3" x:Name="UrgencyReason" Text=""
-                       Foreground="#888" FontSize="11" FontStyle="Italic"
-                       Margin="0,8,0,0"/>
+            <!-- Dismiss button -->
+            <Button Grid.Row="2" Content="Dismiss All" Style="{StaticResource DismissButton}"
+                    HorizontalAlignment="Stretch" Margin="0,8,0,0"
+                    Click="DismissClick"/>
         </Grid>
     </Border>
 </Window>

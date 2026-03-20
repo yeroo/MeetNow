@@ -7,6 +7,7 @@ using System.Data;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 
@@ -20,8 +21,18 @@ namespace MeetNow
         static readonly string InstallDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MeetNow");
 
+        private static Mutex? _singleInstanceMutex;
+
         protected override void OnStartup(StartupEventArgs e)
         {
+            _singleInstanceMutex = new Mutex(true, "MeetNow_SingleInstance_B7A3F2", out bool createdNew);
+            if (!createdNew)
+            {
+                MessageBox.Show("MeetNow is already running.", "MeetNow", MessageBoxButton.OK, MessageBoxImage.Information);
+                Shutdown();
+                return;
+            }
+
             base.OnStartup(e);
             var logFolder = Path.GetTempPath();
 
@@ -30,10 +41,11 @@ namespace MeetNow
                 //.WriteTo.Console()
                 .WriteTo.File(logFolder + @"\MeetNow.log",
                     rollingInterval: RollingInterval.Day,
-                    rollOnFileSizeLimit: true)
+                    rollOnFileSizeLimit: true,
+                    flushToDiskInterval: TimeSpan.FromSeconds(1))
                 .CreateLogger();
             Log.Information("-----------------------");
-            Log.Information($"MeetNow Started");
+            Log.Information("MeetNow Started (build {Build})", BuildInfo.Number);
 
 #if !DEBUG
             if (SelfInstallIfNeeded())

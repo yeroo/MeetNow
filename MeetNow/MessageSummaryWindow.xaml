@@ -54,6 +54,19 @@
                     <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                     <Setter Property="Padding" Value="0"/>
                     <Setter Property="Margin" Value="0,0,0,2"/>
+                    <Setter Property="ContextMenu">
+                        <Setter.Value>
+                            <ContextMenu>
+                                <MenuItem Header="Set Contact Priority">
+                                    <MenuItem Header="Urgent" Tag="Urgent"/>
+                                    <MenuItem Header="Normal" Tag="Normal"/>
+                                    <MenuItem Header="Low" Tag="Low"/>
+                                    <Separator/>
+                                    <MenuItem Header="Default (auto-classify)" Tag="Default"/>
+                                </MenuItem>
+                            </ContextMenu>
+                        </Setter.Value>
+                    </Setter>
                     <Setter Property="Template">
                         <Setter.Value>
                             <ControlTemplate TargetType="ListBoxItem">

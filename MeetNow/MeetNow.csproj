@@ -9,6 +9,7 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <PackageIcon>MeetNow128.png</PackageIcon>
     <ApplicationIcon>Icons\MeetNow.ico</ApplicationIcon>
     <Platforms>AnyCPU;x64</Platforms>
@@ -43,5 +44,16 @@
     </None>
     <EmbeddedResource Include="SFX\big_ben_2013.mp3" />
   </ItemGroup>
+
+  <!-- Auto-generate BuildInfo.cs with an incrementing build number on every build -->
+  <Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_BuildNumber>$([System.DateTime]::Now.ToString("yyMMddHHmm"))</_BuildNumber>
+    </PropertyGroup>
+    <WriteLinesToFile
+      File="$(ProjectDir)BuildInfo.cs"
+      Lines="namespace MeetNow { public static class BuildInfo { public const string Number = &quot;$(_BuildNumber)&quot;%3B } }"
+      Overwrite="true" />
+  </Target>
 
 </Project>

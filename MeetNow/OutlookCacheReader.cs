@@ -31,10 +31,15 @@ namespace MeetNow
         private static readonly byte[] OnlineMeetingJoinUrlFieldBytes = Encoding.ASCII.GetBytes("OnlineMeetingJoinUrl");
         private static readonly byte[] FreeBusyFieldBytes = Encoding.ASCII.GetBytes("FreeBusyType");
         private static readonly byte[] ItemClassFieldBytes = Encoding.ASCII.GetBytes("ItemClass");
+        // Recurrence pattern fields — only present in series master records, not individual occurrences
+        private static readonly byte[] DaysOfWeekFieldBytes = Encoding.ASCII.GetBytes("DaysOf");
 
         // Also look for Subject as UTF-16LE encoded field name
         private static readonly byte[] SubjectUtf16Bytes = Encoding.Unicode.GetBytes("Subject");
         private static readonly byte[] JoinUrlUtf16Bytes = Encoding.Unicode.GetBytes("JoinUrl");
+
+        // Fallback: scan raw data for Teams meeting URLs embedded in HTML body
+        private static readonly byte[] TeamsMeetupJoinBytes = Encoding.ASCII.GetBytes("https://teams.microsoft.com/l/meetup-join/");
 
         /// <summary>
         /// Reads today's calendar events from New Outlook's local cache.
@@ -122,19 +127,9 @@ namespace MeetNow
                     try
                     {
                         var blocks = DecompressSstFile(ldbFile);
-                        if (blocks.Count > 0)
-                        {
-                            // Concatenate all blocks within the same SSTable file
-                            int totalLen = blocks.Sum(b => b.Length);
-                            var combined = new byte[totalLen];
-                            int offset = 0;
-                            foreach (var block in blocks)
-                            {
-                                Buffer.BlockCopy(block, 0, combined, offset, block.Length);
-                                offset += block.Length;
-                            }
-                            perFileBlocks.Add(combined);
-                        }
+                        // Keep each data block separate to avoid cross-record contamination
+                        // when searching for fields near Start dates
+                        perFileBlocks.AddRange(blocks);
                     }
                     catch (Exception ex)
                     {
@@ -456,16 +451,23 @@ namespace MeetNow
                 int windowStart = Math.Max(0, startOffset - 4000);
                 int windowEnd = Math.Min(data.Length, startOffset + 3000);
 
-                // Check if this is actually a calendar event (look for ItemClass = IPM.Schedule or FreeBusyType)
-                var itemClass = FindFieldValue(data, windowStart, windowEnd, ItemClassFieldBytes);
-                var freeBusy = FindFieldValue(data, windowStart, windowEnd, FreeBusyFieldBytes);
+                // Calendar event detail records have FreeBusyType AFTER the Start field.
+                // Only match FreeBusyType in a forward window to avoid matching conversation
+                // thread summaries that have ItemClass=IPM.Schedule but no FreeBusyType.
+                int freeBusySearchEnd = Math.Min(data.Length, startOffset + 2000);
+                var freeBusy = FindFieldValue(data, startOffset, freeBusySearchEnd, FreeBusyFieldBytes);
 
-                // If itemClass contains "Schedule" or we have FreeBusyType, it's a calendar event
-                bool isCalendarEvent = (itemClass != null && itemClass.Contains("Schedule")) ||
-                                       freeBusy != null;
-
-                if (!isCalendarEvent)
+                if (freeBusy == null)
                     continue;
+
+                // Skip recurring series master records — they store the series start date,
+                // not the actual occurrence date. Master records contain a recurrence pattern
+                // with DaysOfWeek, which individual occurrences do not have.
+                if (ContainsBytes(data, windowStart, windowEnd, DaysOfWeekFieldBytes))
+                {
+                    Log.Information("OutlookCacheReader: skipping series master record at {Start}", startValue);
+                    continue;
+                }
 
                 // Extract End date
                 string? endValue = FindFieldValue(data, startOffset + 20, windowEnd, EndFieldBytes);
@@ -506,6 +508,10 @@ namespace MeetNow
                 if (string.IsNullOrEmpty(joinUrl))
                     joinUrl = FindFieldValue(data, windowStart, forwardSearchEnd, JoinUrlUtf16Bytes);
 
+                // Fallback: scan raw bytes for Teams meeting URL embedded in HTML body
+                if (string.IsNullOrEmpty(joinUrl))
+                    joinUrl = FindTeamsUrlInRawData(data, windowStart, forwardSearchEnd);
+
                 // Deduplicate by normalized subject + start time
                 string dedupeKey = $"{StripResponsePrefix(subject)}|{localStart:HH:mm}";
                 if (seenKeys.Contains(dedupeKey))
@@ -531,6 +537,64 @@ namespace MeetNow
             }
 
             return meetings.OrderBy(m => m.Start).ToArray();
+        }
+
+        /// <summary>
+        /// Checks if a byte pattern exists within the specified range.
+        /// </summary>
+        private static bool ContainsBytes(byte[] data, int start, int end, byte[] pattern)
+        {
+            end = Math.Min(end, data.Length);
+            for (int i = start; i <= end - pattern.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < pattern.Length; j++)
+                {
+                    if (data[i + j] != pattern[j]) { match = false; break; }
+                }
+                if (match) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Scans raw bytes for a Teams meeting URL (https://teams.microsoft.com/l/meetup-join/...).
+        /// Fallback for when the URL isn't in a structured JoinUrl field but is in the HTML body.
+        /// </summary>
+        private static string? FindTeamsUrlInRawData(byte[] data, int start, int end)
+        {
+            end = Math.Min(end, data.Length);
+            var pattern = TeamsMeetupJoinBytes;
+
+            for (int i = start; i <= end - pattern.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < pattern.Length; j++)
+                {
+                    if (data[i + j] != pattern[j]) { match = false; break; }
+                }
+                if (!match) continue;
+
+                // Found the start of a Teams URL — read until a delimiter
+                int urlStart = i;
+                int urlEnd = i;
+                while (urlEnd < end && data[urlEnd] > 0x20 &&
+                       data[urlEnd] != (byte)'"' && data[urlEnd] != (byte)'<' &&
+                       data[urlEnd] != (byte)'>' && data[urlEnd] != (byte)'\'')
+                {
+                    urlEnd++;
+                }
+
+                int len = urlEnd - urlStart;
+                if (len > 50 && len < 2000) // reasonable URL length
+                {
+                    var url = Encoding.ASCII.GetString(data, urlStart, len);
+                    // Clean up any HTML entity remnants
+                    url = url.Replace("&amp;", "&");
+                    return url;
+                }
+            }
+            return null;
         }
     }
 }
