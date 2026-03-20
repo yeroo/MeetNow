@@ -8,26 +8,26 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 namespace MeetNow
 {
-    internal static class OutlookHelper
+    public static class OutlookHelper
     {
         [DllImport("oleaut32.dll", PreserveSig = false)]
         static extern void GetActiveObject([MarshalAs(UnmanagedType.LPStruct)] Guid rclsid, IntPtr pvReserved, [MarshalAs(UnmanagedType.IUnknown)] out object ppunk);
 
         static T InvokeProperty<T>(this object item, string name)
         {
-            return (T)item.GetType().InvokeMember(name, BindingFlags.GetProperty, null, item, null);
+            return (T)item.GetType().InvokeMember(name, BindingFlags.GetProperty, null, item, null)!;
         }
         static T InvokeMethod<T>(this object item, string name)
         {
-            return (T)item.GetType().InvokeMember(name, BindingFlags.InvokeMethod, null, item, null);
+            return (T)item.GetType().InvokeMember(name, BindingFlags.InvokeMethod, null, item, null)!;
         }
         static T InvokeMethod1<T>(this object item, string name, object arg1)
         {
-            return (T)item.GetType().InvokeMember(name, BindingFlags.InvokeMethod, null, item, new object[] { arg1 });
+            return (T)item.GetType().InvokeMember(name, BindingFlags.InvokeMethod, null, item, new object[] { arg1 })!;
         }
         static T InvokeMethod2<T>(this object item, string name, object arg1, object arg2)
         {
-            return (T)item.GetType().InvokeMember(name, BindingFlags.InvokeMethod, null, item, new object[] { arg1, arg2 });
+            return (T)item.GetType().InvokeMember(name, BindingFlags.InvokeMethod, null, item, new object[] { arg1, arg2 })!;
         }
 
         static TeamsMeeting CreateTeamsMeeting(object item, bool reccurent, string username)
@@ -75,7 +75,7 @@ namespace MeetNow
             return retVal;
         }
 
-        internal static (TeamsMeeting[], string) GetTeamsMeetings(DateTime date, bool debug = false)
+        public static (TeamsMeeting[], string) GetTeamsMeetings(DateTime date, bool debug = false)
         {
             if (debug)
 
@@ -197,8 +197,8 @@ namespace MeetNow
                 catch
                 {
                     // Fallback: create via ProgID (connects to running instance for OOP COM)
-                    Type outlookAppType = Type.GetTypeFromProgID("Outlook.Application");
-                    outlookApp = Activator.CreateInstance(outlookAppType);
+                    Type? outlookAppType = Type.GetTypeFromProgID("Outlook.Application");
+                    outlookApp = Activator.CreateInstance(outlookAppType!)!;
                     Log.Information("Connected to Outlook via Activator.CreateInstance");
                 }
                 // Get my name
@@ -294,18 +294,18 @@ namespace MeetNow
 
         internal static void StartTeamsMeeting(string teamsUrl)
         {
-            if (!string.IsNullOrEmpty(teamsUrl))
+            if (string.IsNullOrEmpty(teamsUrl)) return;
+
+            // Use the HTTPS URL directly — new Teams 2.0 handles it via the browser redirect
+            // which triggers the ms-teams: protocol handler correctly.
+            // The msteams: protocol conversion doesn't work reliably with new Teams.
+            var launchUrl = teamsUrl;
+            Log.Information("Opening Teams meeting: {Url}", launchUrl);
+            Process.Start(new ProcessStartInfo
             {
-                // Open Teams meeting URL
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "cmd",
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true,
-                    Arguments = $"/c start {teamsUrl}"
-                });
-            }
+                FileName = launchUrl,
+                UseShellExecute = true
+            });
         }
 
     }

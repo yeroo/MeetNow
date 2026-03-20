@@ -1,4 +1,5 @@
 ﻿using FluentScheduler;
+using MeetNow.Models;
 using Microsoft.Win32;
 using Serilog;
 using System;
@@ -31,11 +32,13 @@ namespace MeetNow
     public partial class MainWindow : Window
     {
         const int OUTLOOK_TIMER_INTERVAL_MINUTES = 15;
-        private Timer _timer;
+        private Timer _timer = null!;
+        private TeamsMessageMonitor? _teamsMonitor;
+        private NotificationListenerMonitor? _notificationMonitor;
 
         internal MainWindowModel Model
         {
-            get => DataContext as MainWindowModel;
+            get => (DataContext as MainWindowModel)!;
             private set => DataContext = value;
         }
 
@@ -45,7 +48,10 @@ namespace MeetNow
             Model = new MainWindowModel();
             JobManager.Initialize();
             InitializeComponent();
+            CheckOutlookRunning();
             SetupTimer();
+            StartTeamsMonitor();
+            QueueOverlay.Initialize();
             SystemEvents.PowerModeChanged += OnPowerChange;
 #if DEBUG
             var contextMenu = tb.ContextMenu;
@@ -71,6 +77,22 @@ namespace MeetNow
             test4MenuItem.Click += Test4MenuItem_Click;
 
 
+            // MenuItem: test Teams message popup
+            var test5MenuItem = new MenuItem();
+            test5MenuItem.Header = "Test Teams message popup";
+            test5MenuItem.Click += Test5MenuItem_Click;
+
+            // MenuItem: test Teams status change
+            var test6MenuItem = new MenuItem();
+            test6MenuItem.Header = "Set Teams: Available";
+            test6MenuItem.Click += (_, _) => TeamsOperationQueue.Enqueue("Set Available",
+                () => TeamsStatusManager.SetStatusAsync(TeamsStatusManager.TeamsStatus.Available));
+
+            var test7MenuItem = new MenuItem();
+            test7MenuItem.Header = "Set Teams: Busy";
+            test7MenuItem.Click += (_, _) => TeamsOperationQueue.Enqueue("Set Busy",
+                () => TeamsStatusManager.SetStatusAsync(TeamsStatusManager.TeamsStatus.Busy));
+
             // MenuItem: separator
             var separator = new Separator();
 
@@ -78,7 +100,17 @@ namespace MeetNow
             contextMenu.Items.Insert(1, test2MenuItem);
             contextMenu.Items.Insert(2, test3MenuItem);
             contextMenu.Items.Insert(3, test4MenuItem);
-            contextMenu.Items.Insert(4, separator);
+            contextMenu.Items.Insert(4, test5MenuItem);
+            // MenuItem: test typing simulation
+            var test8MenuItem = new MenuItem();
+            test8MenuItem.Header = "Test: Simulate Typing";
+            test8MenuItem.Click += (_, _) => TeamsOperationQueue.Enqueue("Simulate typing to Boris Kudriashov",
+                () => TeamsStatusManager.SimulateTypingAsync("Boris Kudriashov"));
+
+            contextMenu.Items.Insert(5, test6MenuItem);
+            contextMenu.Items.Insert(6, test7MenuItem);
+            contextMenu.Items.Insert(7, test8MenuItem);
+            contextMenu.Items.Insert(8, separator);
 #endif
         }
         private void OnPowerChange(object sender, PowerModeChangedEventArgs e)
@@ -96,6 +128,70 @@ namespace MeetNow
                     break;
             }
         }
+        private void CheckOutlookRunning()
+        {
+            var source = MeetNowSettings.Instance.OutlookSource;
+
+            if (source == "Classic")
+            {
+                bool isRunning = Process.GetProcessesByName("OUTLOOK").Length > 0;
+                if (!isRunning)
+                {
+                    var result = MessageBox.Show(
+                        "Classic Outlook is not running.\n\n" +
+                        "Start it? MeetNow will restart after Outlook launches.\n\n" +
+                        "Click No to open Settings and change the Outlook source.",
+                        "MeetNow", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+                    if (result == MessageBoxResult.Yes)
+                    {
+                        try
+                        {
+                            Process.Start(new ProcessStartInfo { FileName = "outlook.exe", UseShellExecute = true });
+                            Log.Information("Launched Classic Outlook, restarting in 5s...");
+                            System.Threading.Tasks.Task.Delay(5000).ContinueWith(_ =>
+                                Dispatcher.Invoke(() => MeetNowHelper.RestartApplication()));
+                            return;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Failed to start Classic Outlook");
+                        }
+                    }
+                    SettingsWindow.ShowWindow();
+                }
+            }
+            else
+            {
+                bool isRunning = Process.GetProcessesByName("olk").Length > 0;
+                if (!isRunning)
+                {
+                    var result = MessageBox.Show(
+                        "New Outlook is not running.\n\n" +
+                        "Start it?\n\n" +
+                        "Click No to open Settings and change the Outlook source.",
+                        "MeetNow", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+                    if (result == MessageBoxResult.Yes)
+                    {
+                        try
+                        {
+                            Process.Start(new ProcessStartInfo { FileName = "ms-outlook:", UseShellExecute = true });
+                            Log.Information("Launched New Outlook via ms-outlook: protocol");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Failed to start New Outlook");
+                        }
+                    }
+                    else
+                    {
+                        SettingsWindow.ShowWindow();
+                    }
+                }
+            }
+        }
+
         private void SetupTimer()
         {
             _timer = new Timer(TimerElapsed, null, 0, OUTLOOK_TIMER_INTERVAL_MINUTES * 60 * 1000); // 5 minutes in milliseconds
@@ -107,13 +203,128 @@ namespace MeetNow
             RefreshOutlookWithRetry();
         }
 
+        private void StartTeamsMonitor()
+        {
+            try
+            {
+                var username = Model.Username ?? Environment.UserName;
+
+                _notificationMonitor = new NotificationListenerMonitor(username);
+                _notificationMonitor.NewMessageDetected += OnTeamsMessageDetected;
+                if (_notificationMonitor.Start())
+                {
+                    Log.Information("Teams monitor: using Win32 accessibility hooks for toast detection");
+                }
+
+                _teamsMonitor = new TeamsMessageMonitor(username);
+                _teamsMonitor.NewMessageDetected += OnTeamsMessageDetected;
+                if (_teamsMonitor.Start())
+                {
+                    Log.Information("Teams monitor: LevelDB polling active as supplement");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to start Teams message monitor");
+            }
+        }
+
+        private void OnTeamsMessageDetected(TeamsMessage message)
+        {
+            try
+            {
+                // Check for per-contact priority override first
+                if (ContactPriorityProvider.TryGetUrgencyOverride(message.Sender, out var overrideUrgency, out var overrideReason))
+                {
+                    message.Urgency = overrideUrgency;
+                    message.UrgencyReason = overrideReason;
+                }
+                else
+                {
+                    var (urgency, reason) = LocalUrgencyClassifier.Classify(message);
+                    message.Urgency = urgency;
+                    message.UrgencyReason = reason;
+                }
+
+                Log.Information("Message urgency: {Urgency} ({Reason})", message.Urgency, message.UrgencyReason);
+                MessageSummaryWindow.AddMessage(message);
+
+                if (AutopilotOverlay.IsActive)
+                {
+                    switch (message.Urgency)
+                    {
+                        case MessageUrgency.Urgent:
+                            TeamsMessagePopupWindow.ShowUrgentMessage(message);
+                            if (message.IsDirectChat)
+                            {
+                                var settings = MeetNowSettings.Instance;
+                                if (settings.SimulateTypingInAutopilot
+                                    && TeamsOperationQueue.TryClaimSimulateTyping(message.Sender))
+                                {
+                                    TeamsOperationQueue.Enqueue($"Simulate typing to {message.Sender}",
+                                        () => TeamsStatusManager.SimulateTypingAsync(message.Sender));
+                                }
+                                if (settings.AutoReplyHiInAutopilot)
+                                    AutopilotOverlay.TrackUrgentMessage(message.Sender);
+                                ForwardUrgentIfEnabled(message);
+                            }
+                            break;
+                        case MessageUrgency.Normal:
+                            TeamsMessagePopupWindow.PlayNormalSound();
+                            break;
+                        // Low: no sound, no popup
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error handling Teams message");
+            }
+        }
+
+        private void ForwardUrgentIfEnabled(TeamsMessage message)
+        {
+            var settings = MeetNowSettings.Instance;
+            if (!settings.ForwardUrgentInAutopilot || string.IsNullOrWhiteSpace(settings.ForwardToEmail))
+                return;
+
+            var forwardText = $"{message.Sender} (Urgent): {message.Content}";
+            Log.Information("Forwarding urgent message to {Email}: {Preview}",
+                settings.ForwardToEmail, forwardText.Length > 80 ? forwardText[..80] : forwardText);
+
+            TeamsOperationQueue.Enqueue($"Forward to {settings.ForwardToEmail}",
+                () => TeamsStatusManager.SendMessageAsync(settings.ForwardToEmail, forwardText));
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
             _timer.Dispose();
+            _notificationMonitor?.Dispose();
+            _teamsMonitor?.Dispose();
             JobManager.StopAndBlock();
             Application.Current.Shutdown();
             Log.Information("Application closed");
+        }
+
+        private void MenuItem_MessagesClick(object sender, RoutedEventArgs e)
+        {
+            MessageSummaryWindow.ShowWindow();
+        }
+
+        private void MenuItem_SettingsClick(object sender, RoutedEventArgs e)
+        {
+            SettingsWindow.ShowWindow();
+        }
+
+        private void MenuItem_AutopilotClick(object sender, RoutedEventArgs e)
+        {
+            AutopilotOverlay.Toggle();
+        }
+
+        private void MenuItem_ClearQueueClick(object sender, RoutedEventArgs e)
+        {
+            TeamsOperationQueue.ClearQueue();
         }
 
         private void MenuItem_ExitAppClick(object sender, RoutedEventArgs e)
@@ -131,31 +342,61 @@ namespace MeetNow
             }
             return retries < retryCount;
         }
-        bool _IsOutlookRunningMessageBoxShown = false;
         private bool RefreshOutlook(bool debug = false)
         {
             try
             {
                 Log.Information("Refreshing Outlook");
-                bool isOutlookRunning = false;
-                // Detect if Outlook is running
-                try
+                var now = DateTime.Now;
+                string username = Dispatcher.Invoke(() => Model.Username) ?? Environment.UserName;
+
+                var source = MeetNowSettings.Instance.OutlookSource;
+                TeamsMeeting[] meetings;
+
+                if (source == "Classic")
                 {
-                    Process[] proc = Process.GetProcessesByName("OUTLOOK");
-                    if (proc.Length > 0)
+                    bool isRunning = Process.GetProcessesByName("OUTLOOK").Length > 0;
+                    if (!isRunning)
                     {
-                        isOutlookRunning = true;
+                        Log.Warning("Classic Outlook selected but not running");
+                        return false;
+                    }
+                    try
+                    {
+                        (meetings, username) = OutlookHelper.GetTeamsMeetings(now, debug);
+                        Log.Information("Classic Outlook COM: {Count} meetings", meetings.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Outlook COM not available");
+                        return false;
                     }
                 }
-                catch (Exception ex)
+                else
                 {
-                    Log.Error(ex, "There is an exception!");
+                    bool isRunning = Process.GetProcessesByName("olk").Length > 0;
+                    try
+                    {
+                        meetings = OutlookCacheReader.GetTodaysMeetings(now);
+                        Log.Information("New Outlook cache: {Count} meetings (olk running={Running})", meetings.Length, isRunning);
+                        if (!isRunning && meetings.Length > 0)
+                            Log.Warning("New Outlook not running — cache may be stale");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Error reading Outlook cache");
+                        return false;
+                    }
                 }
-                if (isOutlookRunning)
+
+                if (meetings.Length == 0)
                 {
-                    // If outlook is running - continue
-                    var now = DateTime.Now;
-                    (var meetings, var username) = OutlookHelper.GetTeamsMeetings(now, debug);
+                    Log.Information("No meetings found");
+                    return true; // not an error — just no meetings today
+                }
+
+                if (meetings.Length > 0)
+                {
                     meetings = meetings.OrderBy(m => m.Start).ToArray();
                     Dispatcher.Invoke(() =>
                     {
@@ -232,22 +473,9 @@ namespace MeetNow
                             tb.ContextMenu.Items.Insert(contextMenuNum, separator);
                             _scheduledPopupMenuItems.Add(separator);
                         });
-                    return true;
-                }
-                else
-                {
-                    Log.Information("Outlook is not running");
-                    if (!_IsOutlookRunningMessageBoxShown)
-                    {
-                        Dispatcher.Invoke(() =>
-                        {
-                            MessageBox.Show("Please start Outlook to use this application", "Outlook is not running", MessageBoxButton.OK, MessageBoxImage.Information);
-                        });
-                        _IsOutlookRunningMessageBoxShown = true;
-                    }
-                    return false;
                 }
 
+                return true;
             }
             catch (Exception ex)
             {
@@ -260,8 +488,8 @@ namespace MeetNow
         {
             if (sender is MenuItem menuItem && menuItem.Tag is TeamsMeeting meeting)
             {
+                Log.Information("Starting meeting: {Time} - {Subject} URL=[{Url}]", meeting.Start.ToString("HH:mm"), meeting.Subject, meeting.TeamsUrl);
                 OutlookHelper.StartTeamsMeeting(meeting.TeamsUrl);
-                Log.Information($"Starting meeting: {meeting.Start.ToString("HH:mm")} - {meeting.Subject}");
             }
         }
         public static void SchedulePopup(DateTime startTime, List<TeamsMeeting> subjects)
@@ -308,6 +536,23 @@ namespace MeetNow
 
                 RunPowershellCommand($"Get-Content '{currentLogFilePath}' -Wait -Tail 50");
             }
+        }
+        private void Test5MenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            var testMessage = new TeamsMessage
+            {
+                Id = "test_" + DateTime.Now.Ticks,
+                Sender = "Doe, John TESTORG/IT",
+                Content = "Hey, are you available? We have a production issue with the deployment pipeline and need your help ASAP.",
+                Timestamp = DateTime.Now,
+                ThreadType = "chat",
+                IsMention = true,
+                MentionedNames = new[] { "Kudriashov" },
+                Urgency = MessageUrgency.Urgent,
+                UrgencyReason = "Direct message requesting immediate help with production issue"
+            };
+
+            TeamsMessagePopupWindow.ShowUrgentMessage(testMessage);
         }
         private void RunPowershellCommand(string command)
         {

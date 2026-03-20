@@ -20,7 +20,7 @@ namespace MeetNow
 
         public void Execute()
         {
-            if (_events == null || _events.Length > 0)
+            if (_events != null && _events.Length > 0)
             {
                 Log.Information($"EventPopupJob.Execute {_events[0].Start}: {_events[0].Subject}");
                 Application.Current.Dispatcher.Invoke(() =>

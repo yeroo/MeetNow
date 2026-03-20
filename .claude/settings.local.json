@@ -12,7 +12,8 @@
       "Bash(\"C:/Program Files/7-Zip/7z.exe\" l:*)",
       "Read(//c/Users/Boris.Kudriashov/**)",
       "Bash(powershell -Command \"[Environment]::GetFolderPath\\(''Desktop''\\)\")",
-      "Bash(cd \"C:\\\\Users\\\\Boris.Kudriashov\\\\Source\\\\repos\\\\MeetNow\" && gh auth status 2>&1)"
+      "Bash(cd \"C:\\\\Users\\\\Boris.Kudriashov\\\\Source\\\\repos\\\\MeetNow\" && gh auth status 2>&1)",
+      "Bash(find /c/Users/Boris.Kudriashov -maxdepth 6 -path \"*/Microsoft/Teams*\" -type d 2>/dev/null | head -20)"
     ]
   }
 }

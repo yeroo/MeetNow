@@ -1,0 +1,218 @@
+<Window x:Class="MeetNow.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MeetNow Settings"
+        Width="480" Height="600"
+        WindowStartupLocation="CenterScreen"
+        Background="#1F1F1F"
+        Icon="/Icons/MeetNow.ico"
+        ResizeMode="NoResize">
+    <Window.Resources>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#F0F0F0"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,16,0,8"/>
+        </Style>
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="Background" Value="#3D3D3D"/>
+            <Setter Property="Foreground" Value="#CCC"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#555"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="RemoveButton" TargetType="Button">
+            <Setter Property="Background" Value="#4D2020"/>
+            <Setter Property="Foreground" Value="#F88"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Content" Value="Remove"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#6D3030"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="16">
+            <!-- Outlook Source -->
+            <TextBlock Text="Outlook Source" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+            <TextBlock Text="Choose which Outlook app provides your calendar data."
+                       Foreground="#888" FontSize="11" Margin="0,0,0,8"/>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                <RadioButton x:Name="OutlookSourceNew" Content="New Outlook"
+                             Foreground="#DDD" FontSize="13" Margin="0,0,20,0"
+                             GroupName="OutlookSource" Checked="OutlookSource_Changed"/>
+                <RadioButton x:Name="OutlookSourceClassic" Content="Classic Outlook"
+                             Foreground="#DDD" FontSize="13"
+                             GroupName="OutlookSource" Checked="OutlookSource_Changed"/>
+            </StackPanel>
+
+            <TextBlock x:Name="OutlookSourceStatus" Text="" Foreground="#888" FontSize="11" Margin="0,0,0,8"/>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                <Button Content="Restart MeetNow" Style="{StaticResource ActionButton}"
+                        Margin="0,0,8,0" Background="#2D3D5A" Foreground="#8BF"
+                        Click="RestartMeetNow_Click"/>
+                <Button Content="Restart Outlook + MeetNow" Style="{StaticResource ActionButton}"
+                        Background="#5A2D2D" Foreground="#F88"
+                        Click="RestartOutlookAndMeetNow_Click"/>
+            </StackPanel>
+
+            <!-- Autopilot Behavior -->
+            <TextBlock Text="Autopilot Behavior" Style="{StaticResource SectionHeader}" Margin="0,0,0,8"/>
+
+            <CheckBox x:Name="SimulateTypingCheckBox" Foreground="#DDD" FontSize="13" Margin="0,0,0,6"
+                      Content="Simulate typing on urgent messages" Checked="SimulateTypingCheckBox_Changed" Unchecked="SimulateTypingCheckBox_Changed"/>
+
+            <CheckBox x:Name="AutoReplyHiCheckBox" Foreground="#DDD" FontSize="13" Margin="0,0,0,6"
+                      Content="Auto-reply 'Hi' after 10 min (if 3+ urgent messages)" Checked="AutoReplyHiCheckBox_Changed" Unchecked="AutoReplyHiCheckBox_Changed"/>
+
+            <CheckBox x:Name="ForwardCheckBox" Foreground="#DDD" FontSize="13" Margin="0,0,0,10"
+                      Content="Forward urgent messages to contact" Checked="ForwardCheckBox_Changed" Unchecked="ForwardCheckBox_Changed"/>
+
+            <TextBlock Text="Forward to (email):" Foreground="#AAA" FontSize="12" Margin="0,0,0,4"/>
+            <DockPanel Margin="0,0,0,6">
+                <Button DockPanel.Dock="Right" Content="Clear" Style="{StaticResource ActionButton}"
+                        Margin="8,0,0,0" Click="ClearForwardTo_Click"/>
+                <Button DockPanel.Dock="Right" Content="Save" Style="{StaticResource ActionButton}"
+                        Margin="8,0,0,0" Click="SaveForwardTo_Click" Background="#2D5A2D" Foreground="#8F8"/>
+                <TextBox x:Name="ForwardToEmail" Background="#2A2A2A" Foreground="#F0F0F0"
+                         BorderBrush="#444" BorderThickness="1" Padding="8,6" FontSize="13"/>
+            </DockPanel>
+            <TextBlock x:Name="ForwardToStatus" Text="" Foreground="#888" FontSize="11" Margin="0,0,0,4"/>
+
+            <!-- Urgent Contacts Section -->
+            <TextBlock Text="Urgent Contacts" Style="{StaticResource SectionHeader}"/>
+            <TextBlock Text="Messages from these contacts are always treated as urgent."
+                       Foreground="#888" FontSize="11" Margin="0,0,0,8"/>
+
+            <ItemsControl x:Name="UrgentContactsList"/>
+
+            <TextBlock x:Name="NoUrgentContacts" Text="No urgent contacts configured"
+                       Foreground="#666" FontSize="12" Margin="0,4,0,0"/>
+
+            <!-- All Priority Overrides Section -->
+            <TextBlock Text="All Priority Overrides" Style="{StaticResource SectionHeader}"/>
+            <TextBlock Text="All contacts with custom priority settings."
+                       Foreground="#888" FontSize="11" Margin="0,0,0,8"/>
+
+            <ItemsControl x:Name="AllOverridesList"/>
+
+            <TextBlock x:Name="NoOverrides" Text="No priority overrides configured"
+                       Foreground="#666" FontSize="12" Margin="0,4,0,0"/>
+
+            <!-- Recent Contacts Section -->
+            <TextBlock Text="Recent Contacts (from Teams)" Style="{StaticResource SectionHeader}"/>
+            <TextBlock Text="Browse recent contacts from Teams and set their priority."
+                       Foreground="#888" FontSize="11" Margin="0,0,0,8"/>
+
+            <Button x:Name="RefreshRecentContactsBtn" Content="Refresh from Teams" Style="{StaticResource ActionButton}"
+                    HorizontalAlignment="Left" Margin="0,0,0,8" Click="RefreshRecentContacts_Click"/>
+
+            <ItemsControl x:Name="RecentContactsList"/>
+
+            <TextBlock x:Name="NoRecentContacts" Text="Click Refresh to load recent contacts"
+                       Foreground="#666" FontSize="12" Margin="0,4,0,0"/>
+
+            <!-- Timings Section -->
+            <TextBlock Text="Timings" Style="{StaticResource SectionHeader}"/>
+
+            <Grid Margin="0,0,0,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="70"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Autopilot auto-off time"
+                           Foreground="#CCC" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                <TextBox x:Name="AutopilotOffTimeBox" Grid.Row="0" Grid.Column="1"
+                         Background="#2A2A2A" Foreground="#F0F0F0" BorderBrush="#444" BorderThickness="1"
+                         Padding="6,4" FontSize="12" Margin="8,4" HorizontalContentAlignment="Center"/>
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="HH:mm" Foreground="#888" FontSize="12"
+                           VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Delay between Teams operations"
+                           Foreground="#CCC" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                <TextBox x:Name="OpDelayBox" Grid.Row="1" Grid.Column="1"
+                         Background="#2A2A2A" Foreground="#F0F0F0" BorderBrush="#444" BorderThickness="1"
+                         Padding="6,4" FontSize="12" Margin="8,4" HorizontalContentAlignment="Center"/>
+                <TextBlock Grid.Row="1" Grid.Column="2" Text="sec" Foreground="#888" FontSize="12"
+                           VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Simulate typing duration"
+                           Foreground="#CCC" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                <TextBox x:Name="TypingDurationBox" Grid.Row="2" Grid.Column="1"
+                         Background="#2A2A2A" Foreground="#F0F0F0" BorderBrush="#444" BorderThickness="1"
+                         Padding="6,4" FontSize="12" Margin="8,4" HorizontalContentAlignment="Center"/>
+                <TextBlock Grid.Row="2" Grid.Column="2" Text="sec" Foreground="#888" FontSize="12"
+                           VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Simulate typing cooldown per contact"
+                           Foreground="#CCC" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                <TextBox x:Name="TypingCooldownBox" Grid.Row="3" Grid.Column="1"
+                         Background="#2A2A2A" Foreground="#F0F0F0" BorderBrush="#444" BorderThickness="1"
+                         Padding="6,4" FontSize="12" Margin="8,4" HorizontalContentAlignment="Center"/>
+                <TextBlock Grid.Row="3" Grid.Column="2" Text="min" Foreground="#888" FontSize="12"
+                           VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="Auto-reply 'Hi' delay"
+                           Foreground="#CCC" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                <TextBox x:Name="AutoReplyDelayBox" Grid.Row="4" Grid.Column="1"
+                         Background="#2A2A2A" Foreground="#F0F0F0" BorderBrush="#444" BorderThickness="1"
+                         Padding="6,4" FontSize="12" Margin="8,4" HorizontalContentAlignment="Center"/>
+                <TextBlock Grid.Row="4" Grid.Column="2" Text="min" Foreground="#888" FontSize="12"
+                           VerticalAlignment="Center"/>
+
+                <TextBlock Grid.Row="5" Grid.Column="0" Text="Auto-reply message threshold"
+                           Foreground="#CCC" FontSize="12" VerticalAlignment="Center" Margin="0,4"/>
+                <TextBox x:Name="AutoReplyThresholdBox" Grid.Row="5" Grid.Column="1"
+                         Background="#2A2A2A" Foreground="#F0F0F0" BorderBrush="#444" BorderThickness="1"
+                         Padding="6,4" FontSize="12" Margin="8,4" HorizontalContentAlignment="Center"/>
+                <TextBlock Grid.Row="5" Grid.Column="2" Text="msgs" Foreground="#888" FontSize="12"
+                           VerticalAlignment="Center"/>
+            </Grid>
+
+            <Button Content="Save Timings" Style="{StaticResource ActionButton}" Margin="0,8,0,0"
+                    HorizontalAlignment="Left" Background="#2D5A2D" Foreground="#8F8"
+                    Click="SaveTimings_Click"/>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

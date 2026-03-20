@@ -2,13 +2,14 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <PackageIcon>MeetNow128.png</PackageIcon>
     <ApplicationIcon>Icons\MeetNow.ico</ApplicationIcon>
     <Platforms>AnyCPU;x64</Platforms>
@@ -27,6 +28,7 @@
   <ItemGroup>
     <PackageReference Include="FluentScheduler" Version="5.5.1" />
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="1.1.0" />
+    <PackageReference Include="IronSnappy" Version="1.3.1" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Serilog" Version="3.0.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
@@ -42,5 +44,16 @@
     </None>
     <EmbeddedResource Include="SFX\big_ben_2013.mp3" />
   </ItemGroup>
+
+  <!-- Auto-generate BuildInfo.cs with an incrementing build number on every build -->
+  <Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile">
+    <PropertyGroup>
+      <_BuildNumber>$([System.DateTime]::Now.ToString("yyMMddHHmm"))</_BuildNumber>
+    </PropertyGroup>
+    <WriteLinesToFile
+      File="$(ProjectDir)BuildInfo.cs"
+      Lines="namespace MeetNow { public static class BuildInfo { public const string Number = &quot;$(_BuildNumber)&quot;%3B } }"
+      Overwrite="true" />
+  </Target>
 
 </Project>

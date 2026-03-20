@@ -19,18 +19,18 @@ namespace MeetNow
     {
         public DateTime Start { get; set; }
         public DateTime End { get; set; }
-        public string Subject { get; set; }
-        public string TeamsUrl { get; set; }
+        public string Subject { get; set; } = "";
+        public string TeamsUrl { get; set; } = "";
         public bool Recurrent { get; set; }
         public ResponseStatus ResponseStatus { get; set; }
-        public string Location { get; set; }
-        public string Organizer { get; set; }
+        public string Location { get; set; } = "";
+        public string Organizer { get; set; } = "";
         public bool IsRequired { get; set; }
-        public string[] RequiredAttendees { get; set; }
-        public string[] OptionalAttendees { get; set; }
-        public string Body { get; set; }
-        public string Categories { get; set; }
-        public byte[] RTFBody { get; set; }
+        public string[] RequiredAttendees { get; set; } = Array.Empty<string>();
+        public string[] OptionalAttendees { get; set; } = Array.Empty<string>();
+        public string Body { get; set; } = "";
+        public string Categories { get; set; } = "";
+        public byte[] RTFBody { get; set; } = Array.Empty<byte>();
 
     }
 }
