@@ -29,6 +29,14 @@ namespace MeetNow
             "/status",
             "/api/mt/",
             "/api/csa/",
+            "/owa/",
+            "/calendar/api/",
+            "outlook.office.com/api/",
+            "outlook.office365.com/api/",
+            "substrate.office.com/",
+            "outlook.cloud.microsoft/",
+            "startupdata.ashx",
+            "service.svc",
         };
 
         private CoreWebView2? _webView;
@@ -86,9 +94,13 @@ namespace MeetNow
                     LogTraffic($"{method} {status} {contentType} {uri}");
                 }
 
-                // Only process JSON responses from interesting endpoints
+                // Only process JSON (or x-javascript from Outlook) from interesting endpoints
                 if (status < 200 || status >= 300) return;
-                if (!contentType.Contains("json", StringComparison.OrdinalIgnoreCase)) return;
+                var isJson = contentType.Contains("json", StringComparison.OrdinalIgnoreCase);
+                var isOutlookJs = contentType.Contains("x-javascript", StringComparison.OrdinalIgnoreCase)
+                    && (uri.Contains("outlook.office.com", StringComparison.OrdinalIgnoreCase)
+                        || uri.Contains("outlook.cloud.microsoft", StringComparison.OrdinalIgnoreCase));
+                if (!isJson && !isOutlookJs) return;
                 if (!IsInteresting(uri)) return;
 
                 // Try to read the response body
@@ -645,6 +657,44 @@ namespace MeetNow
             catch (Exception ex)
             {
                 LogTraffic($"  CAL_WEBPACK_ERROR: {ex.Message}");
+            }
+
+            // Step 4: Navigate to Outlook calendar directly
+            // The WebView2 shares cookies, so Outlook should be auto-authenticated.
+            // The network interceptor will capture all Outlook API calls.
+            LogTraffic("  CAL_OUTLOOK_NAV: Navigating to Outlook calendar...");
+            try
+            {
+                _webView!.Navigate("https://outlook.office.com/calendar/view/day");
+
+                // Wait for Outlook to load and make its API calls
+                await Task.Delay(20000);
+
+                // Read what we captured — check the traffic log for outlook.office.com JSON calls
+                var outlookTrafficJs = @"
+(function() {
+    // Just confirm we're on Outlook now
+    return JSON.stringify({
+        title: document.title,
+        url: window.location.href
+    });
+})();";
+                var navResult = await _webView.ExecuteScriptAsync(outlookTrafficJs);
+                if (navResult != null && navResult != "null")
+                {
+                    var inner = JsonSerializer.Deserialize<string>(navResult);
+                    if (inner != null)
+                        LogTraffic($"  CAL_OUTLOOK_PAGE: {inner}");
+                }
+
+                // Navigate back to Teams
+                await Task.Delay(2000);
+                _webView.Navigate("https://teams.microsoft.com");
+                LogTraffic("  CAL_OUTLOOK_NAV: Navigated back to Teams");
+            }
+            catch (Exception ex)
+            {
+                LogTraffic($"  CAL_OUTLOOK_NAV_ERROR: {ex.Message}");
             }
 
             LogTraffic("  === CALENDAR DISCOVERY END ===");
