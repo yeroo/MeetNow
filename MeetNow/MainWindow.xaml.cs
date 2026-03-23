@@ -35,6 +35,7 @@ namespace MeetNow
         private Timer _timer = null!;
         private TeamsMessageMonitor? _teamsMonitor;
         private NotificationListenerMonitor? _notificationMonitor;
+        private TeamsWebViewWindow? _teamsWebViewWindow;
 
         internal MainWindowModel Model
         {
@@ -52,6 +53,12 @@ namespace MeetNow
             SetupTimer();
             StartTeamsMonitor();
             QueueOverlay.Initialize();
+            if (MeetNowSettings.Instance.ShowTeamsWebView)
+            {
+                _teamsWebViewWindow = new TeamsWebViewWindow();
+                _teamsWebViewWindow.Show();
+                _teamsWebViewWindow.InitializeWebView();
+            }
             SystemEvents.PowerModeChanged += OnPowerChange;
 #if DEBUG
             var contextMenu = tb.ContextMenu;
@@ -299,6 +306,7 @@ namespace MeetNow
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
+            _teamsWebViewWindow?.DisposeWebView();
             _timer.Dispose();
             _notificationMonitor?.Dispose();
             _teamsMonitor?.Dispose();
@@ -330,6 +338,20 @@ namespace MeetNow
         private void MenuItem_ExitAppClick(object sender, RoutedEventArgs e)
         {
             Close();
+        }
+
+        private void MenuItem_TeamsWebViewClick(object sender, RoutedEventArgs e)
+        {
+            if (_teamsWebViewWindow == null)
+            {
+                _teamsWebViewWindow = new TeamsWebViewWindow();
+                _teamsWebViewWindow.InitializeWebView();
+            }
+
+            if (_teamsWebViewWindow.IsVisible)
+                _teamsWebViewWindow.Hide();
+            else
+                _teamsWebViewWindow.Show();
         }
         private bool RefreshOutlookWithRetry(bool debug = false, int retryCount = 3)
         {
