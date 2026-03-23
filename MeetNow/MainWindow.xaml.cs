@@ -37,6 +37,7 @@ namespace MeetNow
         private NotificationListenerMonitor? _notificationMonitor;
         private TeamsWebViewWindow? _teamsWebViewWindow;
         private MeetingDataAggregator? _meetingAggregator;
+        private FindPersonWindow? _findPersonWindow;
 
         internal MainWindowModel Model
         {
@@ -309,6 +310,7 @@ namespace MeetNow
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
+            ContactDatabase.FlushAndDispose();
             _teamsWebViewWindow?.DisposeWebView();
             _timer.Dispose();
             _notificationMonitor?.Dispose();
@@ -355,6 +357,21 @@ namespace MeetNow
                 _teamsWebViewWindow.Hide();
             else
                 _teamsWebViewWindow.Show();
+        }
+
+        private void MenuItem_FindPersonClick(object sender, RoutedEventArgs e)
+        {
+            if (_findPersonWindow == null)
+            {
+                _findPersonWindow = new FindPersonWindow(
+                    () => _teamsWebViewWindow?.Extractor,
+                    () => _teamsWebViewWindow?.Enricher);
+            }
+
+            if (_findPersonWindow.IsVisible)
+                _findPersonWindow.Hide();
+            else
+                _findPersonWindow.Show();
         }
         private bool RefreshOutlookWithRetry(bool debug = false, int retryCount = 3)
         {

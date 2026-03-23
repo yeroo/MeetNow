@@ -19,6 +19,7 @@
                     <MenuItem Header="Clear Queue" Click="MenuItem_ClearQueueClick"/>
                     <MenuItem Header="Settings" Click="MenuItem_SettingsClick"/>
                     <MenuItem Header="Teams WebView" Click="MenuItem_TeamsWebViewClick"/>
+                    <MenuItem Header="Find Person" Click="MenuItem_FindPersonClick"/>
                     <Separator/>
                     <MenuItem Header="Exit" Click="MenuItem_ExitAppClick"/>
                 </ContextMenu>
