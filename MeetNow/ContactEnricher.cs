@@ -46,7 +46,8 @@ namespace MeetNow
         private void EnsureTimerRunning()
         {
             if (_timer != null) return;
-            _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            // 5-second interval to allow WS hook to capture bearer token first
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             _timer.Tick += async (s, e) => await ProcessNextAsync();
             _timer.Start();
         }
@@ -101,59 +102,69 @@ namespace MeetNow
             if (orgId.StartsWith("8:orgid:", StringComparison.OrdinalIgnoreCase))
                 orgId = orgId["8:orgid:".Length..];
 
+            var displayName = ContactDatabase.GetById(teamsUserId)?.DisplayName ?? "";
+            var safeDisplayName = displayName.Replace("'", "\\'").Replace("\\", "\\\\");
+
             var js = $@"
-(async function() {{
+(function() {{
+    window.__meetNowEnrich = undefined;
+    (async function() {{
     try {{
-        // Try Teams user profile endpoint
-        var resp = await fetch('/api/mt/part/emea-02/beta/users/8:orgid:{orgId}/properties', {{
-            credentials: 'include'
-        }});
-        if (!resp.ok) {{
-            // Try search as fallback
-            var existing = {JsonSerializer.Serialize(ContactDatabase.GetById(teamsUserId)?.DisplayName ?? "")};
-            if (existing) {{
-                var searchResp = await fetch('/api/mt/part/emea-02/beta/users/searchV2?includeDLs=false&includeBots=false&enableGuest=true&source=newChat&skypeTeamsInfo=true', {{
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{ queryText: existing }})
-                }});
-                if (searchResp.ok) {{
-                    var data = await searchResp.json();
-                    var results = data.value || data.results || data || [];
-                    if (Array.isArray(results)) {{
-                        for (var i = 0; i < results.length; i++) {{
-                            var r = results[i];
-                            if (r.mri === '8:orgid:{orgId}' || r.objectId === '{orgId}') {{
-                                return JSON.stringify({{
-                                    email: r.email || r.sipAddress || r.userPrincipalName || null,
-                                    displayName: r.displayName || null,
-                                    jobTitle: r.jobTitle || null,
-                                    department: r.department || null,
-                                    phone: r.phoneNumber || r.phone || null
-                                }});
-                            }}
-                        }}
-                    }}
-                }}
-            }}
-            return null;
+        // Use the bearer token captured from C# network interceptor
+        var token = window.__meetNowCapturedToken;
+        if (!token) {{
+            window.__meetNowEnrich = JSON.stringify({{ error: 'no captured token' }});
+            return;
         }}
-        var data = await resp.json();
-        return JSON.stringify({{
-            email: data.email || data.sipAddress || data.userPrincipalName || null,
-            displayName: data.displayName || null,
-            jobTitle: data.jobTitle || null,
-            department: data.department || null,
-            phone: data.phoneNumber || data.phone || null
+
+        // Step 2: Search with the bearer token
+        var searchResp = await fetch('/api/mt/part/emea-02/beta/users/searchV2?includeDLs=false&includeBots=false&enableGuest=true&source=newChat&skypeTeamsInfo=true', {{
+            method: 'POST',
+            credentials: 'include',
+            headers: {{
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token
+            }},
+            body: JSON.stringify({{ queryText: '{safeDisplayName}' }})
         }});
-    }} catch(e) {{ return null; }}
+        if (!searchResp.ok) {{
+            window.__meetNowEnrich = JSON.stringify({{ error: 'search status ' + searchResp.status }});
+            return;
+        }}
+        var data = await searchResp.json();
+        window.__meetNowEnrich = JSON.stringify({{
+            rawKeys: Object.keys(data),
+            resultCount: (data.value || data.results || []).length,
+            firstResult: (data.value || data.results || [])[0] || null,
+            tokenKeyUsed: Object.keys(tokens || {{}})[0]
+        }});
+    }} catch(e) {{ window.__meetNowEnrich = JSON.stringify({{ error: e.message }}); }}
+}})();
+return 'started';
 }})();";
 
             try
             {
-                // ExecuteScriptAsync resolves JS Promises natively
-                var readResult = await _extractor.EvaluateJsAsync(js);
+                // Inject the captured bearer token into the page
+                var capturedToken = _extractor.CapturedBearerToken;
+                if (capturedToken != null)
+                {
+                    await _extractor.EvaluateJsAsync(
+                        $"(function() {{ window.__meetNowCapturedToken = '{capturedToken}'; return 'ok'; }})();");
+                }
+
+                // Inject — the outer sync IIFE returns 'started', inner async stores result in global
+                var injectResult = await _extractor.EvaluateJsAsync(js);
+                Log.Information("Enrich inject for {Id}: {Result}", teamsUserId, injectResult);
+
+                // Wait for async fetch to complete
+                await Task.Delay(5000);
+
+                // Read the result
+                var readResult = await _extractor.EvaluateJsAsync(
+                    "(function() { var r = window.__meetNowEnrich; window.__meetNowEnrich = undefined; return typeof r === 'undefined' ? '__UNDEFINED__' : (r === null ? '__NULL__' : r); })();");
+                Log.Information("Enrich read for {Id}: {Result}", teamsUserId, readResult ?? "(c# null)");
+                if (readResult == "__UNDEFINED__" || readResult == "__NULL__") readResult = null;
 
                 if (readResult == null) return null;
 

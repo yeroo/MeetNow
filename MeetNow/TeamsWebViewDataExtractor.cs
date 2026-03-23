@@ -46,6 +46,9 @@ namespace MeetNow
         private DispatcherTimer? _jsProbeTimer;
         private bool _jsProbingStarted;
 
+        private string? _capturedBearerToken;
+        public string? CapturedBearerToken => _capturedBearerToken;
+
         public event Action<TeamsMeeting>? MeetingDetected;
         public event Action<TeamsMessage>? MessageDetected;
         public event Action<string>? ContactDiscovered;
@@ -97,6 +100,21 @@ namespace MeetNow
 
                 // Auto-discover contacts from profile picture URLs
                 TryExtractContact(uri);
+
+                // Capture auth token from Teams API requests
+                if (uri.Contains("/api/mt/", StringComparison.OrdinalIgnoreCase)
+                    || uri.Contains("/api/chatsvc/", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var authHeader = e.Request.Headers.GetHeader("Authorization");
+                        if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _capturedBearerToken = authHeader["Bearer ".Length..];
+                        }
+                    }
+                    catch { }
+                }
 
                 // Only process JSON (or x-javascript from Outlook) from interesting endpoints
                 if (status < 200 || status >= 300) return;
@@ -299,6 +317,11 @@ namespace MeetNow
         window.__meetNowWsStats.connections++;
 
         var pushMsg = function(dir, data) {
+            // Capture bearer token from auth messages and store permanently
+            if (typeof data === 'string' && data.indexOf('Bearer ') >= 0 && !window.__meetNowBearerToken) {
+                var tokenMatch = data.match(/Bearer\s+(eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)/);
+                if (tokenMatch) window.__meetNowBearerToken = tokenMatch[1];
+            }
             var entry = { dir: dir, ts: Date.now(), url: url };
             if (typeof data === 'string') {
                 entry.data = data.substring(0, 2000);
