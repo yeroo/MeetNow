@@ -22,6 +22,12 @@ namespace MeetNow
 
         public void Enqueue(string teamsUserId)
         {
+            // DISABLED: Enrichment API calls return 401 and repeated failures
+            // could trigger IT security alerts. Re-enable once we have a safe
+            // token acquisition strategy (e.g. intercepting tokens from actual
+            // Teams API calls that succeed).
+            return;
+
             // Skip if already enriched recently
             var existing = ContactDatabase.GetById(teamsUserId);
             if (existing != null && existing.EnrichmentStatus == EnrichmentStatus.Enriched
