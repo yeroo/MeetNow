@@ -344,30 +344,39 @@ namespace MeetNow
 
             try
             {
-                // Probe 1: Harvest WebSocket messages
+                // Probe 1: Harvest ALL WebSocket messages (log every frame)
                 var wsHarvestJs = @"
 (function() {
     try {
         var result = { stats: window.__meetNowWsStats || {} };
         var msgs = window.__meetNowWsMessages || [];
-
-        // Find messages containing interesting keywords
-        var interesting = [];
-        for (var i = 0; i < msgs.length; i++) {
-            var d = (msgs[i].data || '').toLowerCase();
-            if (d.indexOf('calendar') >= 0 || d.indexOf('presence') >= 0 ||
-                d.indexOf('message') >= 0 || d.indexOf('meeting') >= 0 ||
-                d.indexOf('status') >= 0 || d.indexOf('notification') >= 0 ||
-                d.indexOf('availability') >= 0 || d.indexOf('event') >= 0) {
-                interesting.push(msgs[i]);
-            }
-        }
-        result.interesting = interesting.slice(-20); // last 20 interesting
         result.totalBuffered = msgs.length;
 
-        // Clear harvested messages
-        window.__meetNowWsMessages = [];
+        // Log ALL messages, not just filtered ones
+        result.messages = [];
+        for (var i = 0; i < msgs.length; i++) {
+            var m = msgs[i];
+            // Parse Trouter frame format: '5:N+::{json}' or '5:N::{json}'
+            var parsed = null;
+            if (typeof m.data === 'string' && m.data.indexOf('::{') >= 0) {
+                try {
+                    var jsonStart = m.data.indexOf('::{') + 2;
+                    parsed = JSON.parse(m.data.substring(jsonStart));
+                } catch(e) {}
+            } else if (typeof m.data === 'string' && m.data.charAt(0) === '{') {
+                try { parsed = JSON.parse(m.data); } catch(e) {}
+            }
+            result.messages.push({
+                dir: m.dir,
+                ts: m.ts,
+                url: m.url ? m.url.substring(0, 60) : '',
+                len: m.len,
+                name: parsed && parsed.name ? parsed.name : null,
+                preview: typeof m.data === 'string' ? m.data.substring(0, 300) : m.data
+            });
+        }
 
+        window.__meetNowWsMessages = [];
         return JSON.stringify(result);
     } catch(e) {
         return JSON.stringify({ error: e.message });
@@ -378,62 +387,185 @@ namespace MeetNow
                 if (wsResult != null && wsResult != "null")
                 {
                     var inner = JsonSerializer.Deserialize<string>(wsResult);
-                    if (inner != null && !inner.Contains("\"interesting\":[]"))
+                    if (inner != null && !inner.Contains("\"messages\":[]"))
                     {
-                        LogTraffic($"  WS_HARVEST: {Truncate(inner, 2000)}");
-                        Log.Debug("WS harvest: {Result}", Truncate(inner, 500));
+                        LogTraffic($"  WS_ALL: {Truncate(inner, 4000)}");
                     }
                     else if (inner != null)
                     {
-                        // Still log stats even when no interesting messages
                         using var doc = JsonDocument.Parse(inner);
                         if (doc.RootElement.TryGetProperty("stats", out var stats))
-                        {
                             LogTraffic($"  WS_STATS: {stats}");
-                        }
                     }
                 }
 
-                // Probe 2: Check webpack interesting modules (only first time they're found)
-                var wpProbeJs = @"
+                // Probe 2: Read React Context _currentValue for app state
+                var contextJs = @"
 (function() {
     try {
-        var info = window.__meetNowWebpackInfo;
-        if (!info) return JSON.stringify({ explored: false });
-        return JSON.stringify({
-            modules: info.modules,
-            interestingCount: info.interesting ? info.interesting.length : 0,
-            interesting: info.interesting ? info.interesting.slice(0, 20) : []
-        });
+        var wpReq = window.__meetNowWebpackRequire;
+        if (!wpReq || !wpReq.c) return JSON.stringify({ error: 'no webpack require' });
+
+        var cache = wpReq.c;
+        var mod = cache['93952'] || cache['101262'];
+        if (!mod || !mod.exports) return JSON.stringify({ error: 'context module not found' });
+
+        var exp = mod.exports;
+        var result = {};
+
+        // Read AppStateContext._currentValue
+        if (exp.AppStateContext && exp.AppStateContext._currentValue) {
+            var appState = exp.AppStateContext._currentValue;
+            var stateKeys = Object.keys(appState);
+            result.appStateKeys = stateKeys;
+            result.appStateType = typeof appState;
+
+            // Drill into each key to find calendar/presence/chat data
+            var drilled = {};
+            for (var i = 0; i < stateKeys.length; i++) {
+                var k = stateKeys[i];
+                var v = appState[k];
+                if (v === null || v === undefined) {
+                    drilled[k] = null;
+                } else if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+                    drilled[k] = v;
+                } else if (typeof v === 'object') {
+                    drilled[k] = { type: Array.isArray(v) ? 'array(' + v.length + ')' : 'object', keys: Object.keys(v).slice(0, 15) };
+                } else if (typeof v === 'function') {
+                    drilled[k] = { type: 'function', name: v.name || '(anon)' };
+                }
+            }
+            result.appState = drilled;
+        } else {
+            result.appStateContext = exp.AppStateContext ? '_currentValue is ' + typeof (exp.AppStateContext._currentValue) : 'missing';
+        }
+
+        // Read ClientStateContext._currentValue
+        if (exp.ClientStateContext && exp.ClientStateContext._currentValue) {
+            var clientState = exp.ClientStateContext._currentValue;
+            var cKeys = Object.keys(clientState);
+            result.clientStateKeys = cKeys;
+            var cDrilled = {};
+            for (var i = 0; i < cKeys.length; i++) {
+                var k = cKeys[i];
+                var v = clientState[k];
+                if (v === null || v === undefined) {
+                    cDrilled[k] = null;
+                } else if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+                    cDrilled[k] = String(v).substring(0, 200);
+                } else if (typeof v === 'object') {
+                    cDrilled[k] = { type: Array.isArray(v) ? 'array(' + v.length + ')' : 'object', keys: Object.keys(v).slice(0, 15) };
+                } else if (typeof v === 'function') {
+                    cDrilled[k] = { type: 'function', name: v.name || '(anon)' };
+                }
+            }
+            result.clientState = cDrilled;
+        }
+
+        return JSON.stringify(result);
+    } catch(e) {
+        return JSON.stringify({ error: e.message, stack: e.stack ? e.stack.substring(0, 200) : '' });
+    }
+})();";
+
+                try
+                {
+                    var ctxResult = await _webView.ExecuteScriptAsync(contextJs);
+                    LogTraffic($"  REACT_CTX_RAW: {Truncate(ctxResult ?? "null", 4000)}");
+                    if (ctxResult != null && ctxResult != "null" && ctxResult != "\"null\"")
+                    {
+                        var inner = JsonSerializer.Deserialize<string>(ctxResult);
+                        if (inner != null)
+                            LogTraffic($"  REACT_CTX: {Truncate(inner, 4000)}");
+                    }
+                }
+                catch (Exception ctxEx)
+                {
+                    LogTraffic($"  REACT_CTX_ERROR: {ctxEx.Message}");
+                }
+
+                // Probe 4: Deep webpack scan — dump ALL 78 interesting modules
+                var deepScanJs = @"
+(function() {
+    try {
+        var wpReq = window.__meetNowWebpackRequire;
+        if (!wpReq || !wpReq.c) return JSON.stringify({ error: 'no webpack' });
+
+        var cache = wpReq.c;
+        var ids = Object.keys(cache);
+        var found = [];
+
+        for (var i = 0; i < ids.length; i++) {
+            try {
+                var mod = cache[ids[i]];
+                if (!mod || !mod.exports) continue;
+                var exp = mod.exports;
+                var keys = Object.keys(exp);
+                var hasInteresting = false;
+
+                for (var j = 0; j < keys.length; j++) {
+                    var kl = keys[j].toLowerCase();
+                    if (kl.indexOf('calendar') >= 0 || kl.indexOf('presence') >= 0 ||
+                        kl.indexOf('chat') >= 0 || kl.indexOf('message') >= 0 ||
+                        kl.indexOf('meeting') >= 0 || kl.indexOf('status') >= 0 ||
+                        kl.indexOf('availability') >= 0 || kl.indexOf('notification') >= 0 ||
+                        kl.indexOf('conversation') >= 0 || kl.indexOf('contact') >= 0) {
+                        hasInteresting = true;
+                        break;
+                    }
+                }
+                if (!hasInteresting) continue;
+
+                // Dump this module's full export structure
+                var modInfo = { id: ids[i], exports: {} };
+                for (var j = 0; j < keys.length; j++) {
+                    var k = keys[j];
+                    var v = exp[k];
+                    if (v === null || v === undefined) {
+                        modInfo.exports[k] = null;
+                    } else if (typeof v === 'string' || typeof v === 'number') {
+                        modInfo.exports[k] = String(v).substring(0, 100);
+                    } else if (typeof v === 'function') {
+                        modInfo.exports[k] = 'fn(' + v.length + ')' + (v.name ? ':' + v.name : '');
+                    } else if (typeof v === 'object') {
+                        var subKeys = Object.keys(v).slice(0, 20);
+                        var methods = subKeys.filter(function(sk) { return typeof v[sk] === 'function'; });
+                        modInfo.exports[k] = { keys: subKeys, methods: methods, isArray: Array.isArray(v), len: Array.isArray(v) ? v.length : subKeys.length };
+                    }
+                }
+                found.push(modInfo);
+                if (found.length >= 40) break;
+            } catch(e) {}
+        }
+        return JSON.stringify({ total: found.length, modules: found });
     } catch(e) {
         return JSON.stringify({ error: e.message });
     }
 })();";
 
-                var wpResult = await _webView.ExecuteScriptAsync(wpProbeJs);
-                if (wpResult != null && wpResult != "null")
+                try
                 {
-                    var inner = JsonSerializer.Deserialize<string>(wpResult);
-                    if (inner != null && inner.Contains("\"interestingCount\"") && !inner.Contains("\"interestingCount\":0"))
+                    var deepResult = await _webView.ExecuteScriptAsync(deepScanJs);
+                    LogTraffic($"  WEBPACK_DEEP_RAW_LEN: {deepResult?.Length ?? 0}");
+                    if (deepResult != null && deepResult != "null")
                     {
-                        LogTraffic($"  WEBPACK_MODULES: {Truncate(inner, 2000)}");
-                        Log.Debug("Webpack probe: {Result}", Truncate(inner, 500));
+                        var inner = JsonSerializer.Deserialize<string>(deepResult);
+                        if (inner != null)
+                            LogTraffic($"  WEBPACK_DEEP: {Truncate(inner, 6000)}");
                     }
                 }
+                catch (Exception wpEx)
+                {
+                    LogTraffic($"  WEBPACK_DEEP_ERROR: {wpEx.Message}");
+                }
 
-                // Probe 3: Title (unread count / current view)
-                var titleJs = @"
-(function() {
-    return JSON.stringify({ title: document.title, url: window.location.href });
-})();";
+                // Probe 4: Title
+                var titleJs = @"(function() { return JSON.stringify({ title: document.title }); })();";
                 var titleResult = await _webView.ExecuteScriptAsync(titleJs);
                 if (titleResult != null && titleResult != "null")
                 {
                     var inner = JsonSerializer.Deserialize<string>(titleResult);
-                    if (inner != null)
-                    {
-                        LogTraffic($"  JS_PROBE title: {inner}");
-                    }
+                    if (inner != null) LogTraffic($"  TITLE: {inner}");
                 }
             }
             catch (Exception ex)
