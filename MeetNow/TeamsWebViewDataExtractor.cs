@@ -107,6 +107,17 @@ namespace MeetNow
                 var body = await ReadResponseBody(e.Response);
                 if (body == null) return;
 
+                // Write full body to separate file for large responses
+                if (body.Length > 1000)
+                {
+                    try
+                    {
+                        var bodyLogPath = Path.Combine(Path.GetTempPath(), "MeetNow_WebView_Bodies.log");
+                        File.AppendAllText(bodyLogPath,
+                            $"[{DateTime.Now:HH:mm:ss.fff}] {uri}{Environment.NewLine}{body}{Environment.NewLine}---{Environment.NewLine}");
+                    }
+                    catch { }
+                }
                 LogTraffic($"  BODY ({body.Length} chars): {Truncate(body, 500)}");
                 Log.Debug("Captured response from {Uri} ({Length} chars)", uri, body.Length);
             }
