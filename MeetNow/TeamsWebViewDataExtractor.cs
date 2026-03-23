@@ -37,6 +37,7 @@ namespace MeetNow
             "outlook.cloud.microsoft/",
             "startupdata.ashx",
             "service.svc",
+            "loki.delve.office.com/api/",
         };
 
         private CoreWebView2? _webView;
@@ -140,6 +141,9 @@ namespace MeetNow
                     }
                     catch { }
                 }
+                // Passively enrich contacts from GetPersona responses
+                TryEnrichFromGetPersona(uri, body);
+
                 LogTraffic($"  BODY ({body.Length} chars): {Truncate(body, 500)}");
                 Log.Debug("Captured response from {Uri} ({Length} chars)", uri, body.Length);
             }
@@ -190,6 +194,60 @@ namespace MeetNow
             return s.Length <= maxLength ? s : s[..maxLength] + "...";
         }
 
+        private void TryEnrichFromGetPersona(string uri, string body)
+        {
+            if (!uri.Contains("action=GetPersona", StringComparison.OrdinalIgnoreCase)) return;
+
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(body);
+                var persona = doc.RootElement.GetProperty("Body").GetProperty("Persona");
+
+                var displayName = persona.TryGetProperty("DisplayName", out var dn) ? dn.GetString() : null;
+                var email = persona.TryGetProperty("EmailAddress", out var ea)
+                    && ea.TryGetProperty("EmailAddress", out var addr) ? addr.GetString() : null;
+                var title = persona.TryGetProperty("Title", out var t) ? t.GetString() : null;
+                var department = persona.TryGetProperty("Department", out var d) ? d.GetString() : null;
+                var company = persona.TryGetProperty("CompanyName", out var c) ? c.GetString() : null;
+                var phone = persona.TryGetProperty("BusinessPhoneNumbersArray", out var phones)
+                    && phones.GetArrayLength() > 0
+                    ? phones[0].GetProperty("Value").GetProperty("Number").GetString() : null;
+                var adObjectId = persona.TryGetProperty("ADObjectId", out var ad) ? ad.GetString() : null;
+
+                if (string.IsNullOrWhiteSpace(displayName) || string.IsNullOrWhiteSpace(email)) return;
+
+                // Map ADObjectId to TeamsUserId format
+                var teamsUserId = !string.IsNullOrEmpty(adObjectId) ? $"8:orgid:{adObjectId}" : null;
+
+                // Try to find existing contact by email or name
+                var existing = teamsUserId != null ? ContactDatabase.GetById(teamsUserId) : null;
+                existing ??= ContactDatabase.GetByEmail(email);
+                if (existing == null)
+                {
+                    var nameMatches = ContactDatabase.GetByName(displayName);
+                    existing = nameMatches.Count > 0 ? nameMatches[0] : null;
+                }
+
+                var contact = existing ?? new Models.Contact();
+                contact.TeamsUserId = existing?.TeamsUserId ?? teamsUserId ?? $"ad:{adObjectId}";
+                contact.DisplayName = displayName;
+                contact.Email = email;
+                contact.JobTitle = title ?? contact.JobTitle;
+                contact.Department = department ?? contact.Department;
+                contact.Phone = phone ?? contact.Phone;
+                contact.LastSeenTimestamp = DateTime.Now;
+                contact.EnrichmentStatus = Models.EnrichmentStatus.Enriched;
+
+                ContactDatabase.Upsert(contact);
+                Log.Information("Contact enriched from GetPersona: {Name} <{Email}> [{Title}]",
+                    displayName, email, title ?? "");
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Failed to parse GetPersona response");
+            }
+        }
+
         private void TryExtractContact(string uri)
         {
             try
@@ -226,7 +284,58 @@ namespace MeetNow
                     }
                 }
 
-                // Pattern 2: /mergedProfilePicturev2?usersInfo=[{userId, displayName}]
+                // Pattern 2: Loki Delve person API — URL contains teamsMri and smtp (email)
+        // e.g. loki.delve.office.com/api/v2/person?...teamsMri=8:orgid:GUID&smtp=email@shell.com
+        if (uri.Contains("loki.delve.office.com/api/", StringComparison.OrdinalIgnoreCase)
+            && uri.Contains("teamsMri=", StringComparison.OrdinalIgnoreCase)
+            && uri.Contains("smtp=", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                string? teamsMri = null;
+                string? email = null;
+
+                var mriParam = "teamsMri=";
+                var mriStart = uri.IndexOf(mriParam, StringComparison.OrdinalIgnoreCase);
+                if (mriStart >= 0)
+                {
+                    mriStart += mriParam.Length;
+                    var mriEnd = uri.IndexOf('&', mriStart);
+                    teamsMri = Uri.UnescapeDataString(mriEnd >= 0 ? uri[mriStart..mriEnd] : uri[mriStart..]);
+                }
+
+                var smtpParam = "smtp=";
+                var smtpStart = uri.IndexOf(smtpParam, StringComparison.OrdinalIgnoreCase);
+                if (smtpStart >= 0)
+                {
+                    smtpStart += smtpParam.Length;
+                    var smtpEnd = uri.IndexOf('&', smtpStart);
+                    email = Uri.UnescapeDataString(smtpEnd >= 0 ? uri[smtpStart..smtpEnd] : uri[smtpStart..]);
+                }
+
+                if (!string.IsNullOrWhiteSpace(teamsMri) && !string.IsNullOrWhiteSpace(email))
+                {
+                    var existing = ContactDatabase.GetById(teamsMri);
+                    ContactDatabase.Upsert(new Models.Contact
+                    {
+                        TeamsUserId = teamsMri,
+                        DisplayName = existing?.DisplayName ?? "",
+                        Email = email,
+                        LastSeenTimestamp = DateTime.Now,
+                        Source = existing?.Source ?? Models.ContactSource.Chat,
+                        EnrichmentStatus = Models.EnrichmentStatus.Enriched
+                    });
+                    ContactDiscovered?.Invoke(teamsMri);
+                    Log.Information("Contact enriched from Loki URL: {Email} ({Id})", email, teamsMri);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Failed to extract contact from Loki URL");
+            }
+        }
+
+        // Pattern 3: /mergedProfilePicturev2?usersInfo=[{userId, displayName}]
                 if (uri.Contains("mergedProfilePicturev2", StringComparison.OrdinalIgnoreCase)
                     && uri.Contains("usersInfo=", StringComparison.OrdinalIgnoreCase))
                 {
