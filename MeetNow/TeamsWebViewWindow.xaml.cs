@@ -66,6 +66,12 @@ namespace MeetNow
             {
                 StatusBar.Text = $"Loaded: {url}";
                 Log.Information("WebView2 navigation completed: {Url}", url);
+
+                // Start JS probing once Teams web has loaded
+                if (url.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase))
+                {
+                    _extractor?.StartJsProbing();
+                }
             }
             else
             {
@@ -83,6 +89,7 @@ namespace MeetNow
 
         public void DisposeWebView()
         {
+            _extractor?.StopJsProbing();
             _extractor?.Detach();
             webView?.Dispose();
         }

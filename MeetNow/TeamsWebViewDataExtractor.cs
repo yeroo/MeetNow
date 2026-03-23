@@ -35,6 +35,8 @@ namespace MeetNow
         private readonly bool _logAllTraffic;
         private readonly ConcurrentBag<TeamsMeeting> _meetings = new();
         private readonly ConcurrentBag<TeamsMessage> _messages = new();
+        private DispatcherTimer? _jsProbeTimer;
+        private bool _jsProbingStarted;
 
         public event Action<TeamsMeeting>? MeetingDetected;
         public event Action<TeamsMessage>? MessageDetected;
@@ -141,6 +143,103 @@ namespace MeetNow
         private static string Truncate(string s, int maxLength)
         {
             return s.Length <= maxLength ? s : s[..maxLength] + "...";
+        }
+
+        public void StartJsProbing(int intervalSeconds = 30)
+        {
+            if (_jsProbingStarted) return; // Guard against multiple navigation events
+            _jsProbingStarted = true;
+
+            _jsProbeTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(intervalSeconds)
+            };
+            _jsProbeTimer.Tick += async (s, e) => await ProbeTeamsStateAsync();
+            _jsProbeTimer.Start();
+
+            Log.Information("JS state probing started (every {Interval}s)", intervalSeconds);
+        }
+
+        public void StopJsProbing()
+        {
+            _jsProbeTimer?.Stop();
+            _jsProbeTimer = null;
+            _jsProbingStarted = false;
+        }
+
+        private async Task ProbeTeamsStateAsync()
+        {
+            if (_webView == null) return;
+
+            try
+            {
+                // Probe 1: Check what global state objects exist
+                var globalsJs = @"
+(function() {
+    try {
+        var found = {};
+        // Check common React/Redux state patterns
+        if (window.__REDUX_STORE__) found.redux = true;
+        if (window.__NEXT_DATA__) found.nextData = true;
+        if (window.store) found.store = true;
+        if (window.__appState) found.appState = true;
+
+        // Check for Teams-specific globals
+        var teamsKeys = Object.keys(window).filter(function(k) {
+            return k.toLowerCase().indexOf('teams') >= 0 ||
+                   k.toLowerCase().indexOf('skype') >= 0 ||
+                   k.toLowerCase().indexOf('presence') >= 0 ||
+                   k.toLowerCase().indexOf('calendar') >= 0;
+        });
+        if (teamsKeys.length > 0) found.teamsGlobals = teamsKeys;
+
+        // Check document title for state indicators
+        found.title = document.title;
+        found.url = window.location.href;
+
+        return JSON.stringify(found);
+    } catch(e) {
+        return JSON.stringify({ error: e.message });
+    }
+})();";
+
+                var result = await _webView.ExecuteScriptAsync(globalsJs);
+                if (result != null && result != "null")
+                {
+                    // ExecuteScriptAsync returns a JSON-encoded string, so the result
+                    // is double-quoted. Parse it to get the inner JSON.
+                    var inner = JsonSerializer.Deserialize<string>(result);
+                    if (inner != null)
+                    {
+                        LogTraffic($"  JS_PROBE globals: {inner}");
+                        Log.Debug("JS probe result: {Result}", inner);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "JS probe failed (page may still be loading)");
+            }
+        }
+
+        /// <summary>
+        /// Execute arbitrary JS in the Teams page context. For POC exploration.
+        /// </summary>
+        public async Task<string?> EvaluateJsAsync(string script)
+        {
+            if (_webView == null) return null;
+
+            try
+            {
+                var result = await _webView.ExecuteScriptAsync(script);
+                if (result == "null") return null;
+                return JsonSerializer.Deserialize<string>(result);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "JS evaluation failed");
+                return null;
+            }
         }
     }
 }
