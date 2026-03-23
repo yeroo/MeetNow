@@ -48,6 +48,9 @@ namespace MeetNow
                 OutlookSourceNew.IsChecked = true;
             UpdateOutlookSourceStatus();
 
+            ShowWebViewCheckBox.IsChecked = settings.ShowTeamsWebView;
+            LogTrafficCheckBox.IsChecked = settings.LogAllWebViewTraffic;
+
             AutopilotOffTimeBox.Text = settings.AutopilotOffTime;
             OpDelayBox.Text = settings.TeamsOperationDelaySeconds.ToString();
             TypingDurationBox.Text = settings.SimulateTypingDurationSeconds.ToString();
@@ -80,6 +83,20 @@ namespace MeetNow
         {
             MeetNowSettings.Instance.ForwardUrgentInAutopilot = ForwardCheckBox.IsChecked == true;
             MeetNowSettings.Instance.Save();
+        }
+
+        private void ShowWebViewCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            var settings = MeetNowSettings.Instance;
+            settings.ShowTeamsWebView = ShowWebViewCheckBox.IsChecked == true;
+            settings.Save();
+        }
+
+        private void LogTrafficCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            var settings = MeetNowSettings.Instance;
+            settings.LogAllWebViewTraffic = LogTrafficCheckBox.IsChecked == true;
+            settings.Save();
         }
 
         private void SaveForwardTo_Click(object sender, RoutedEventArgs e)
