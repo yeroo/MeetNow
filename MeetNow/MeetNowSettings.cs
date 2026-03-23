@@ -30,6 +30,10 @@ namespace MeetNow
         public int AutoReplyDelayMinutes { get; set; } = 10;
         public int AutoReplyMessageThreshold { get; set; } = 3;
 
+        // WebView2 POC
+        public bool ShowTeamsWebView { get; set; } = true;
+        public bool LogAllWebViewTraffic { get; set; } = true;
+
         public static MeetNowSettings Instance => _instance ??= Load();
 
         private static MeetNowSettings Load()
