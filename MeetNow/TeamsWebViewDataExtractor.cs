@@ -48,6 +48,7 @@ namespace MeetNow
 
         public event Action<TeamsMeeting>? MeetingDetected;
         public event Action<TeamsMessage>? MessageDetected;
+        public event Action<string>? ContactDiscovered;
 
         public TeamsWebViewDataExtractor(bool logAllTraffic = true)
         {
@@ -203,6 +204,7 @@ namespace MeetNow
                             LastSeenTimestamp = DateTime.Now,
                             Source = Models.ContactSource.Chat
                         });
+                        ContactDiscovered?.Invoke(teamsUserId);
                     }
                 }
 
@@ -229,6 +231,7 @@ namespace MeetNow
                                 LastSeenTimestamp = DateTime.Now,
                                 Source = Models.ContactSource.Chat
                             });
+                            ContactDiscovered?.Invoke(userId);
                         }
                     }
                 }

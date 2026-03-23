@@ -14,8 +14,10 @@ namespace MeetNow
 
         private bool _isInitialized;
         private TeamsWebViewDataExtractor? _extractor;
+        private ContactEnricher? _enricher;
 
         public TeamsWebViewDataExtractor? Extractor => _extractor;
+        public ContactEnricher? Enricher => _enricher;
 
         public TeamsWebViewWindow()
         {
@@ -51,6 +53,9 @@ namespace MeetNow
                 _extractor = new TeamsWebViewDataExtractor(
                     MeetNowSettings.Instance.LogAllWebViewTraffic);
                 _extractor.Attach(webView.CoreWebView2);
+                _enricher = new ContactEnricher(_extractor);
+                _enricher.Start();
+                _extractor.ContactDiscovered += userId => _enricher?.Enqueue(userId);
             }
             catch (Exception ex)
             {
@@ -89,6 +94,7 @@ namespace MeetNow
 
         public void DisposeWebView()
         {
+            _enricher?.Stop();
             _extractor?.StopJsProbing();
             _extractor?.Detach();
             webView?.Dispose();
