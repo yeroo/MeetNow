@@ -160,6 +160,9 @@ namespace MeetNow
                 _hooksInjected = true;
             }
 
+            // Run calendar discovery once after hooks are ready
+            _ = DiscoverCalendarDataAsync();
+
             _jsProbeTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(intervalSeconds)
@@ -336,6 +339,315 @@ namespace MeetNow
             {
                 Log.Warning(ex, "Failed to inject webpack explorer");
             }
+        }
+
+        /// <summary>
+        /// One-shot calendar data discovery via multiple approaches.
+        /// Since ExecuteScriptAsync can't await JS Promises, we inject async code
+        /// that stores results in window.__meetNowCal, then read them after a delay.
+        /// </summary>
+        private async Task DiscoverCalendarDataAsync()
+        {
+            if (_webView == null) return;
+
+            // Wait for Teams to fully initialize
+            await Task.Delay(15000);
+
+            LogTraffic("  === CALENDAR DISCOVERY START ===");
+
+            // Step 1: Inject all async fetches — they store results in window.__meetNowCal
+            var injectJs = @"
+(function() {
+    window.__meetNowCal = { status: 'running' };
+
+    // Helper to get today's ISO date range
+    var now = new Date();
+    var start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    var end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();
+
+    // Approach 1: Graph API — acquire token via MSAL or find PublicClientApplication
+    (async function() {
+        try {
+            var token = null;
+
+            // Strategy A: Find MSAL PublicClientApplication in webpack modules
+            var wpReq = window.__meetNowWebpackRequire;
+            if (wpReq && wpReq.c) {
+                var cache = wpReq.c;
+                var ids = Object.keys(cache);
+                for (var i = 0; i < ids.length && !token; i++) {
+                    try {
+                        var mod = cache[ids[i]];
+                        if (!mod || !mod.exports) continue;
+                        var exp = mod.exports;
+                        var keys = Object.keys(exp);
+                        for (var j = 0; j < keys.length; j++) {
+                            var v = exp[keys[j]];
+                            if (v && typeof v === 'object' && typeof v.acquireTokenSilent === 'function') {
+                                try {
+                                    var accounts = v.getAllAccounts ? v.getAllAccounts() : [];
+                                    if (accounts.length > 0) {
+                                        var tokenResp = await v.acquireTokenSilent({
+                                            scopes: ['Calendars.Read'],
+                                            account: accounts[0]
+                                        });
+                                        token = tokenResp.accessToken;
+                                        window.__meetNowCal.msalSource = 'webpack:' + ids[i] + '.' + keys[j];
+                                        break;
+                                    }
+                                } catch(te) {
+                                    window.__meetNowCal.msalTokenError = te.message;
+                                }
+                            }
+                        }
+                    } catch(e) {}
+                }
+            }
+
+            // Strategy B: Try getting token from Teams' internal auth service
+            if (!token) {
+                try {
+                    var authResp = await fetch('/api/authsvc/v1.0/authz', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ resourceUrl: 'https://graph.microsoft.com' })
+                    });
+                    if (authResp.ok) {
+                        var authData = await authResp.json();
+                        token = authData.accessToken || authData.token || (authData.tokens && authData.tokens[0] && authData.tokens[0].accessToken);
+                        window.__meetNowCal.authSvcResponse = Object.keys(authData);
+                    } else {
+                        window.__meetNowCal.authSvcStatus = authResp.status;
+                    }
+                } catch(ae) {
+                    window.__meetNowCal.authSvcError = ae.message;
+                }
+            }
+
+            if (!token) {
+                window.__meetNowCal.graph = { error: 'could not acquire Graph token' };
+                return;
+            }
+
+            var url = 'https://graph.microsoft.com/v1.0/me/calendarview?startDateTime=' +
+                encodeURIComponent(start) + '&endDateTime=' + encodeURIComponent(end) +
+                '&$select=subject,start,end,organizer,location,onlineMeeting,isOnlineMeeting,onlineMeetingUrl,isCancelled,responseStatus&$top=50';
+            var resp = await fetch(url, {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            var data = await resp.json();
+            window.__meetNowCal.graph = {
+                status: resp.status,
+                count: data.value ? data.value.length : 0,
+                events: data.value ? data.value.map(function(e) {
+                    return { subject: e.subject, start: e.start, end: e.end,
+                        organizer: e.organizer ? e.organizer.emailAddress : null,
+                        location: e.location ? e.location.displayName : null,
+                        isOnline: e.isOnlineMeeting,
+                        joinUrl: e.onlineMeetingUrl || (e.onlineMeeting ? e.onlineMeeting.joinUrl : null),
+                        response: e.responseStatus ? e.responseStatus.response : null,
+                        cancelled: e.isCancelled };
+                }) : [],
+                error: data.error ? data.error.message : null
+            };
+        } catch(e) { window.__meetNowCal.graph = { error: e.message }; }
+    })();
+
+    // Approach 2: Try authorizeResource to get a Graph-scoped token
+    (async function() {
+        try {
+            var wpReq = window.__meetNowWebpackRequire;
+            if (!wpReq || !wpReq.c) { window.__meetNowCal.authRes = { error: 'no webpack' }; return; }
+            var mod37887 = wpReq.c['37887'];
+            if (!mod37887 || !mod37887.exports || !mod37887.exports.authorizeResource) {
+                window.__meetNowCal.authRes = { error: 'authorizeResource not found' };
+                return;
+            }
+            // Try calling authorizeResource — it's fn(5), we need to figure out the args
+            // Log its source to understand what it expects
+            var fn = mod37887.exports.authorizeResource;
+            window.__meetNowCal.authRes = {
+                fnLength: fn.length,
+                fnSource: fn.toString().substring(0, 500)
+            };
+        } catch(e) { window.__meetNowCal.authRes = { error: e.message }; }
+    })();
+
+    // Approach 3: Navigate to calendar tab and intercept the iframe's network
+    // Instead of fetching directly, look at what URLs the calendar iframe loads
+    (function() {
+        try {
+            var iframes = document.querySelectorAll('iframe');
+            var calIframes = [];
+            for (var i = 0; i < iframes.length; i++) {
+                var src = iframes[i].src || '';
+                if (src.indexOf('outlook') >= 0 || src.indexOf('calendar') >= 0 || src.indexOf('substrate') >= 0) {
+                    calIframes.push({ src: src.substring(0, 300), id: iframes[i].id, name: iframes[i].name });
+                }
+            }
+            window.__meetNowCal.calendarIframes = calIframes;
+            window.__meetNowCal.totalIframes = iframes.length;
+        } catch(e) { window.__meetNowCal.iframeError = e.message; }
+    })();
+
+    // Approach 4: Try Substrate calendar API (what Outlook uses internally)
+    (async function() {
+        try {
+            var resp = await fetch('https://substrate.office.com/calendar/api/v2/views/daily?startDate=' +
+                start.split('T')[0] + '&endDate=' + end.split('T')[0], {
+                credentials: 'include',
+                headers: { 'x-anchormailbox': 'UPN:' }
+            });
+            var text = await resp.text();
+            window.__meetNowCal.substrate = { status: resp.status, bodyLen: text.length, preview: text.substring(0, 3000) };
+        } catch(e) { window.__meetNowCal.substrate = { error: e.message }; }
+    })();
+
+    // Approach 4: Scan webpack for any auth/token provider objects
+    (function() {
+        try {
+            var wpReq = window.__meetNowWebpackRequire;
+            if (!wpReq || !wpReq.c) return;
+            var cache = wpReq.c;
+            var ids = Object.keys(cache);
+            var authModules = [];
+            for (var i = 0; i < ids.length && authModules.length < 20; i++) {
+                try {
+                    var mod = cache[ids[i]];
+                    if (!mod || !mod.exports) continue;
+                    var keys = Object.keys(mod.exports);
+                    for (var j = 0; j < keys.length; j++) {
+                        var kl = keys[j].toLowerCase();
+                        if (kl.indexOf('token') >= 0 || kl.indexOf('auth') >= 0 ||
+                            kl.indexOf('msal') >= 0 || kl.indexOf('credential') >= 0) {
+                            var v = mod.exports[keys[j]];
+                            var info = { mod: ids[i], key: keys[j], type: typeof v };
+                            if (typeof v === 'object' && v !== null) {
+                                info.methods = Object.keys(v).filter(function(k) { return typeof v[k] === 'function'; }).slice(0, 10);
+                                info.props = Object.keys(v).filter(function(k) { return typeof v[k] !== 'function'; }).slice(0, 10);
+                            }
+                            if (typeof v === 'function') {
+                                info.fnArgs = v.length;
+                                info.fnName = v.name || '';
+                            }
+                            authModules.push(info);
+                        }
+                    }
+                } catch(e) {}
+            }
+            window.__meetNowCal.authModules = authModules;
+        } catch(e) { window.__meetNowCal.authModulesError = e.message; }
+    })();
+
+    // Approach 5: Try Teams' internal token endpoint
+    (async function() {
+        try {
+            var resp = await fetch('/trap/tokens', { credentials: 'include' });
+            var text = await resp.text();
+            window.__meetNowCal.trapTokens = { status: resp.status, len: text.length, preview: text.substring(0, 1000) };
+        } catch(e) { window.__meetNowCal.trapTokens = { error: e.message }; }
+    })();
+
+    // Mark done after all fire (they run in parallel)
+    setTimeout(function() { window.__meetNowCal.status = 'done'; }, 10000);
+
+    return 'injected';
+})();";
+
+            try
+            {
+                await _webView.ExecuteScriptAsync(injectJs);
+                LogTraffic("  CAL_INJECT: started async fetches");
+            }
+            catch (Exception ex)
+            {
+                LogTraffic($"  CAL_INJECT_ERROR: {ex.Message}");
+                return;
+            }
+
+            // Step 2: Wait for results, then read them
+            await Task.Delay(15000);
+
+            var readJs = @"
+(function() {
+    var cal = window.__meetNowCal;
+    if (!cal) return JSON.stringify({ error: 'no results object' });
+    return JSON.stringify(cal);
+})();";
+
+            try
+            {
+                var readResult = await _webView.ExecuteScriptAsync(readJs);
+                if (readResult != null && readResult != "null")
+                {
+                    var inner = JsonSerializer.Deserialize<string>(readResult);
+                    if (inner != null)
+                        LogTraffic($"  CAL_RESULTS: {Truncate(inner, 8000)}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogTraffic($"  CAL_READ_ERROR: {ex.Message}");
+            }
+
+            // Step 3: Webpack calendar modules (sync, always works)
+            var calModulesJs = @"
+(function() {
+    try {
+        var wpReq = window.__meetNowWebpackRequire;
+        if (!wpReq || !wpReq.c) return JSON.stringify({ error: 'no webpack' });
+        var cache = wpReq.c;
+        var ids = Object.keys(cache);
+        var found = [];
+        for (var i = 0; i < ids.length; i++) {
+            try {
+                var mod = cache[ids[i]];
+                if (!mod || !mod.exports) continue;
+                var exp = mod.exports;
+                var keys = Object.keys(exp);
+                for (var j = 0; j < keys.length; j++) {
+                    var kl = keys[j].toLowerCase();
+                    if (kl.indexOf('calendar') >= 0 || kl.indexOf('schedule') >= 0 ||
+                        kl.indexOf('meeting') >= 0 || kl.indexOf('agenda') >= 0 ||
+                        kl.indexOf('appointment') >= 0) {
+                        var v = exp[keys[j]];
+                        var vt = typeof v;
+                        if (vt === 'function') {
+                            found.push({ mod: ids[i], key: keys[j], type: 'fn', args: v.length, name: v.name || '' });
+                        } else if (vt === 'object' && v !== null) {
+                            var vKeys = Object.keys(v).slice(0, 20);
+                            var methods = vKeys.filter(function(k) { return typeof v[k] === 'function'; });
+                            if (methods.length > 0 || vKeys.length > 3) {
+                                found.push({ mod: ids[i], key: keys[j], type: 'obj', allKeys: vKeys, methods: methods });
+                            }
+                        } else if (vt === 'string' && v.length < 200) {
+                            found.push({ mod: ids[i], key: keys[j], type: 'str', val: v });
+                        }
+                    }
+                }
+            } catch(e) {}
+        }
+        return JSON.stringify({ total: found.length, modules: found });
+    } catch(e) { return JSON.stringify({ error: e.message }); }
+})();";
+
+            try
+            {
+                var calModResult = await _webView.ExecuteScriptAsync(calModulesJs);
+                if (calModResult != null && calModResult != "null")
+                {
+                    var inner = JsonSerializer.Deserialize<string>(calModResult);
+                    if (inner != null)
+                        LogTraffic($"  CAL_WEBPACK: {Truncate(inner, 6000)}");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogTraffic($"  CAL_WEBPACK_ERROR: {ex.Message}");
+            }
+
+            LogTraffic("  === CALENDAR DISCOVERY END ===");
         }
 
         private async Task ProbeTeamsStateAsync()
