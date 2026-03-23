@@ -178,7 +178,7 @@ Aggregates data from all sources and deduplicates.
 | Setting | Type | Default | Purpose |
 |---------|------|---------|---------|
 | `ShowTeamsWebView` | bool | `true` | Show/hide the WebView2 window |
-| `LogAllTraffic` | bool | `true` | POC discovery mode — log all network traffic |
+| `LogAllWebViewTraffic` | bool | `true` | POC discovery mode — log all network traffic |
 
 ## Known Risks & Mitigations
 
