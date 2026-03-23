@@ -36,6 +36,7 @@ namespace MeetNow
         private TeamsMessageMonitor? _teamsMonitor;
         private NotificationListenerMonitor? _notificationMonitor;
         private TeamsWebViewWindow? _teamsWebViewWindow;
+        private MeetingDataAggregator? _meetingAggregator;
 
         internal MainWindowModel Model
         {
@@ -59,6 +60,8 @@ namespace MeetNow
                 _teamsWebViewWindow.Show();
                 _teamsWebViewWindow.InitializeWebView();
             }
+            _meetingAggregator = new MeetingDataAggregator(
+                () => _teamsWebViewWindow?.Extractor);
             SystemEvents.PowerModeChanged += OnPowerChange;
 #if DEBUG
             var contextMenu = tb.ContextMenu;
@@ -372,42 +375,21 @@ namespace MeetNow
                 var now = DateTime.Now;
                 string username = Dispatcher.Invoke(() => Model.Username) ?? Environment.UserName;
 
-                var source = MeetNowSettings.Instance.OutlookSource;
                 TeamsMeeting[] meetings;
-
-                if (source == "Classic")
+                if (_meetingAggregator != null)
                 {
-                    bool isRunning = Process.GetProcessesByName("OUTLOOK").Length > 0;
-                    if (!isRunning)
-                    {
-                        Log.Warning("Classic Outlook selected but not running");
-                        return false;
-                    }
-                    try
-                    {
-                        (meetings, username) = OutlookHelper.GetTeamsMeetings(now, debug);
-                        Log.Information("Classic Outlook COM: {Count} meetings", meetings.Length);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warning(ex, "Outlook COM not available");
-                        return false;
-                    }
+                    meetings = _meetingAggregator.GetMeetings(
+                        now, MeetNowSettings.Instance.OutlookSource, debug);
                 }
                 else
                 {
-                    bool isRunning = Process.GetProcessesByName("olk").Length > 0;
-                    try
-                    {
+                    // Fallback: direct source access (aggregator not yet initialized)
+                    if (MeetNowSettings.Instance.OutlookSource == "New")
                         meetings = OutlookCacheReader.GetTodaysMeetings(now);
-                        Log.Information("New Outlook cache: {Count} meetings (olk running={Running})", meetings.Length, isRunning);
-                        if (!isRunning && meetings.Length > 0)
-                            Log.Warning("New Outlook not running — cache may be stale");
-                    }
-                    catch (Exception ex)
+                    else
                     {
-                        Log.Error(ex, "Error reading Outlook cache");
-                        return false;
+                        var (m, _) = OutlookHelper.GetTeamsMeetings(now, debug);
+                        meetings = m ?? Array.Empty<TeamsMeeting>();
                     }
                 }
 
