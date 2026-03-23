@@ -13,6 +13,9 @@ namespace MeetNow
             "MeetNow", "WebView2Profile");
 
         private bool _isInitialized;
+        private TeamsWebViewDataExtractor? _extractor;
+
+        public TeamsWebViewDataExtractor? Extractor => _extractor;
 
         public TeamsWebViewWindow()
         {
@@ -43,6 +46,11 @@ namespace MeetNow
                 _isInitialized = true;
 
                 Log.Information("WebView2 initialized, navigating to Teams");
+
+                // Attach data extractor
+                _extractor = new TeamsWebViewDataExtractor(
+                    MeetNowSettings.Instance.LogAllWebViewTraffic);
+                _extractor.Attach(webView.CoreWebView2);
             }
             catch (Exception ex)
             {
@@ -75,6 +83,7 @@ namespace MeetNow
 
         public void DisposeWebView()
         {
+            _extractor?.Detach();
             webView?.Dispose();
         }
     }
