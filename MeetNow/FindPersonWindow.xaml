@@ -1,0 +1,27 @@
+<Window x:Class="MeetNow.FindPersonWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Find Person" Width="500" Height="450"
+        WindowStartupLocation="CenterScreen"
+        Background="#1F1F1F" Foreground="#DDD"
+        Topmost="True" ResizeMode="CanResize">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBox x:Name="SearchBox" Grid.Row="0" FontSize="14"
+                 Background="#2A2A2A" Foreground="#EEE" BorderBrush="#444"
+                 Padding="8,6" Margin="0,0,0,8"
+                 TextChanged="SearchBox_TextChanged"/>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="ResultsPanel"/>
+        </ScrollViewer>
+
+        <TextBlock x:Name="StatusText" Grid.Row="2" Foreground="#888"
+                   FontSize="11" Margin="0,8,0,0"/>
+    </Grid>
+</Window>
