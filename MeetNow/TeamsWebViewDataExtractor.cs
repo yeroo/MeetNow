@@ -94,6 +94,9 @@ namespace MeetNow
                     LogTraffic($"{method} {status} {contentType} {uri}");
                 }
 
+                // Auto-discover contacts from profile picture URLs
+                TryExtractContact(uri);
+
                 // Only process JSON (or x-javascript from Outlook) from interesting endpoints
                 if (status < 200 || status >= 300) return;
                 var isJson = contentType.Contains("json", StringComparison.OrdinalIgnoreCase);
@@ -166,6 +169,74 @@ namespace MeetNow
         private static string Truncate(string s, int maxLength)
         {
             return s.Length <= maxLength ? s : s[..maxLength] + "...";
+        }
+
+        private void TryExtractContact(string uri)
+        {
+            try
+            {
+                // Pattern 1: /profilepicturev2/8:orgid:GUID?displayname=Name
+                if (uri.Contains("profilepicturev2/8:orgid:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var orgIdStart = uri.IndexOf("8:orgid:", StringComparison.OrdinalIgnoreCase);
+                    var orgIdEnd = uri.IndexOf('?', orgIdStart);
+                    if (orgIdEnd < 0) orgIdEnd = uri.Length;
+                    var teamsUserId = uri[orgIdStart..orgIdEnd];
+
+                    string? displayName = null;
+                    var dnParam = "displayname=";
+                    var dnStart = uri.IndexOf(dnParam, StringComparison.OrdinalIgnoreCase);
+                    if (dnStart >= 0)
+                    {
+                        dnStart += dnParam.Length;
+                        var dnEnd = uri.IndexOf('&', dnStart);
+                        if (dnEnd < 0) dnEnd = uri.Length;
+                        displayName = Uri.UnescapeDataString(uri[dnStart..dnEnd]);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(teamsUserId) && !string.IsNullOrWhiteSpace(displayName))
+                    {
+                        ContactDatabase.Upsert(new Models.Contact
+                        {
+                            TeamsUserId = teamsUserId,
+                            DisplayName = displayName,
+                            LastSeenTimestamp = DateTime.Now,
+                            Source = Models.ContactSource.Chat
+                        });
+                    }
+                }
+
+                // Pattern 2: /mergedProfilePicturev2?usersInfo=[{userId, displayName}]
+                if (uri.Contains("mergedProfilePicturev2", StringComparison.OrdinalIgnoreCase)
+                    && uri.Contains("usersInfo=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var paramStart = uri.IndexOf("usersInfo=", StringComparison.OrdinalIgnoreCase) + 10;
+                    var paramEnd = uri.IndexOf('&', paramStart);
+                    var rawParam = paramEnd >= 0 ? uri[paramStart..paramEnd] : uri[paramStart..];
+                    var usersJson = Uri.UnescapeDataString(rawParam);
+
+                    using var doc = System.Text.Json.JsonDocument.Parse(usersJson);
+                    foreach (var user in doc.RootElement.EnumerateArray())
+                    {
+                        var userId = user.GetProperty("userId").GetString();
+                        var name = user.GetProperty("displayName").GetString();
+                        if (!string.IsNullOrWhiteSpace(userId) && !string.IsNullOrWhiteSpace(name))
+                        {
+                            ContactDatabase.Upsert(new Models.Contact
+                            {
+                                TeamsUserId = userId,
+                                DisplayName = name,
+                                LastSeenTimestamp = DateTime.Now,
+                                Source = Models.ContactSource.Chat
+                            });
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "Failed to extract contact from URL");
+            }
         }
 
         private bool _hooksInjected;
