@@ -33,8 +33,8 @@ namespace MeetNow.Tasks
         /// Attach to a dedicated WebViewInstance as a persistent listener.
         /// Called once from WebViewManager.StartCalendarMonitorAsync().
         /// </summary>
-        // Join URLs captured from network traffic during page load
-        private static readonly List<string> _capturedJoinUrls = new();
+        // Join URLs captured from network traffic, keyed by nearby subject text
+        private static readonly Dictionary<string, string> _capturedJoinUrls = new(StringComparer.OrdinalIgnoreCase);
 
         public static void StartListening(WebViewInstance instance)
         {
@@ -75,7 +75,6 @@ namespace MeetNow.Tasks
                 var idx = body.IndexOf(pattern, StringComparison.OrdinalIgnoreCase);
                 while (idx >= 0)
                 {
-                    // Find the start of the URL (scan backwards for "https://")
                     var urlStart = body.LastIndexOf("https://", idx, Math.Min(idx, 200), StringComparison.OrdinalIgnoreCase);
                     if (urlStart >= 0)
                     {
@@ -83,25 +82,60 @@ namespace MeetNow.Tasks
                         if (urlEnd < 0) urlEnd = Math.Min(urlStart + 500, body.Length);
                         var url = body[urlStart..urlEnd];
 
-                        // URL-decode if needed
                         if (url.Contains("%2F", StringComparison.OrdinalIgnoreCase))
                             url = Uri.UnescapeDataString(url);
 
+                        // Extract nearby subject: search backwards for "Subject" or "subject" field
+                        var subject = ExtractNearbySubject(body, urlStart);
+
                         lock (_capturedJoinUrls)
                         {
-                            if (!_capturedJoinUrls.Contains(url))
-                            {
-                                _capturedJoinUrls.Add(url);
-                                Log.Information("CalendarCollectorTask: captured join URL from network [{Uri}]: {Url}",
-                                    uri.Length > 80 ? uri[..80] : uri, url);
-                            }
+                            var key = subject ?? url; // use subject as key, fallback to URL itself
+                            _capturedJoinUrls[key] = url;
+                            Log.Information("CalendarCollectorTask: captured join URL [{Subject}] from [{Uri}]: {Url}",
+                                subject ?? "(no subject)", uri.Length > 80 ? uri[..80] : uri, url);
                         }
                     }
 
-                    // Continue searching for more URLs in this body
                     idx = body.IndexOf(pattern, idx + pattern.Length, StringComparison.OrdinalIgnoreCase);
                 }
             }
+        }
+
+        /// <summary>
+        /// Search backwards from a position in the response body to find a nearby Subject field value.
+        /// </summary>
+        private static string? ExtractNearbySubject(string body, int position)
+        {
+            // Look backwards up to 2000 chars for "Subject" or "subject" field
+            var searchStart = Math.Max(0, position - 2000);
+            var searchRegion = body[searchStart..position];
+
+            // Try patterns: "Subject":"value", "subject":"value", "Subject\": \"value\"
+            var patterns = new[] { "\"Subject\":", "\"subject\":", "\"Subject\\\":", "\"subject\\\":" };
+            foreach (var pat in patterns)
+            {
+                var lastIdx = searchRegion.LastIndexOf(pat, StringComparison.OrdinalIgnoreCase);
+                if (lastIdx >= 0)
+                {
+                    // Find the value after the colon
+                    var valueStart = searchRegion.IndexOf('"', lastIdx + pat.Length);
+                    if (valueStart >= 0)
+                    {
+                        valueStart++; // skip opening quote
+                        var valueEnd = searchRegion.IndexOf('"', valueStart);
+                        if (valueEnd > valueStart && valueEnd - valueStart < 200)
+                        {
+                            var subject = searchRegion[valueStart..valueEnd];
+                            // Unescape if needed
+                            subject = subject.Replace("\\\"", "\"").Replace("\\\\", "\\");
+                            if (!string.IsNullOrWhiteSpace(subject))
+                                return subject;
+                        }
+                    }
+                }
+            }
+            return null;
         }
 
         private static async void OnFirstParse(object? sender, EventArgs e)
@@ -265,7 +299,7 @@ namespace MeetNow.Tasks
 
                 Log.Information("CalendarCollectorTask: parsed {Count} meetings from DOM", meetings.Count);
 
-                // Try to assign captured join URLs to meetings with placeholder
+                // Try to assign captured join URLs to meetings by matching subject
                 lock (_capturedJoinUrls)
                 {
                     if (_capturedJoinUrls.Count > 0)
@@ -273,13 +307,27 @@ namespace MeetNow.Tasks
                         Log.Information("CalendarCollectorTask: {Count} join URLs captured from network", _capturedJoinUrls.Count);
                         foreach (var m in meetings)
                         {
-                            if (m.TeamsUrl == "teams-meeting" && _capturedJoinUrls.Count > 0)
+                            if (m.TeamsUrl != "teams-meeting" || string.IsNullOrEmpty(m.Subject)) continue;
+
+                            // Try exact subject match
+                            if (_capturedJoinUrls.TryGetValue(m.Subject, out var exactUrl))
                             {
-                                // For now assign first available URL to first Teams meeting
-                                // TODO: match by meeting ID if multiple meetings
-                                m.TeamsUrl = _capturedJoinUrls[0];
-                                Log.Information("CalendarCollectorTask: assigned network URL to [{Subject}]: {Url}",
-                                    m.Subject, m.TeamsUrl);
+                                m.TeamsUrl = exactUrl;
+                                Log.Information("CalendarCollectorTask: matched URL to [{Subject}]: {Url}", m.Subject, exactUrl);
+                                continue;
+                            }
+
+                            // Try partial match (subject contains or is contained)
+                            foreach (var (key, url) in _capturedJoinUrls)
+                            {
+                                if (key.Contains(m.Subject, StringComparison.OrdinalIgnoreCase)
+                                    || m.Subject.Contains(key, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    m.TeamsUrl = url;
+                                    Log.Information("CalendarCollectorTask: partial matched URL [{Key}] to [{Subject}]: {Url}",
+                                        key, m.Subject, url);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -317,11 +365,21 @@ namespace MeetNow.Tasks
             // Check cached URLs from network interception first
             lock (_capturedJoinUrls)
             {
-                if (_capturedJoinUrls.Count > 0)
+                // Exact match
+                if (_capturedJoinUrls.TryGetValue(subject, out var exactUrl))
                 {
-                    var url = _capturedJoinUrls[0]; // TODO: match by subject
-                    Log.Information("CalendarCollectorTask: using cached network URL for [{Subject}]: {Url}", subject, url);
-                    return url;
+                    Log.Information("CalendarCollectorTask: using cached URL for [{Subject}]: {Url}", subject, exactUrl);
+                    return exactUrl;
+                }
+                // Partial match
+                foreach (var (key, url) in _capturedJoinUrls)
+                {
+                    if (key.Contains(subject, StringComparison.OrdinalIgnoreCase)
+                        || subject.Contains(key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log.Information("CalendarCollectorTask: using partial-matched URL [{Key}] for [{Subject}]: {Url}", key, subject, url);
+                        return url;
+                    }
                 }
             }
 
