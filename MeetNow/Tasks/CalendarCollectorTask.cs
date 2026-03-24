@@ -242,21 +242,29 @@ namespace MeetNow.Tasks
                 var text = evt.TryGetProperty("text", out var tx) ? tx.GetString() ?? "" : "";
                 var timeText = evt.TryGetProperty("time", out var tt) ? tt.GetString() : null;
 
-                // If no explicit subject, try first line of text or first part of aria-label
+                // Skip work location blocks and non-event items
+                if (ariaLabel.Contains("Work location", StringComparison.OrdinalIgnoreCase))
+                    return null;
+
+                // If no explicit subject, try first line of text
                 if (string.IsNullOrWhiteSpace(subject))
                 {
-                    // Try first line of innerText
                     var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
                     if (lines.Length > 0)
                         subject = lines[0].Trim();
                 }
 
+                // Last resort: first part of aria-label, but only if it's not just a time
                 if (string.IsNullOrWhiteSpace(subject))
                 {
-                    // Try first part of aria-label (before first comma with time)
                     var parts = ariaLabel.Split(',');
                     if (parts.Length > 0)
-                        subject = parts[0].Trim();
+                    {
+                        var candidate = parts[0].Trim();
+                        // Skip if it's just a time range like "14:30 to 15:00"
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(candidate, @"^\d{1,2}:\d{2}\s"))
+                            subject = candidate;
+                    }
                 }
 
                 if (string.IsNullOrWhiteSpace(subject)) return null;
