@@ -3,45 +3,17 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="MeetNow — Debug WebView"
         Width="1200" Height="800"
-        WindowStartupLocation="CenterScreen"
-        Background="#1B1A19">
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-
-        <!-- Toolbar -->
-        <Border Grid.Row="0" Background="#2D2D2D" Padding="8,6">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="Instance:" Foreground="#CCCCCC" FontSize="12"
-                           VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <ComboBox x:Name="InstanceCombo" Width="200" FontSize="12"
-                          SelectionChanged="InstanceCombo_SelectionChanged"
-                          Background="#3A3A3A" Foreground="#EEEEEE">
-                    <ComboBox.Resources>
-                        <Style TargetType="ComboBoxItem">
-                            <Setter Property="Background" Value="#2D2D2D"/>
-                            <Setter Property="Foreground" Value="#EEEEEE"/>
-                            <Style.Triggers>
-                                <Trigger Property="IsHighlighted" Value="True">
-                                    <Setter Property="Background" Value="#4A4A4A"/>
-                                    <Setter Property="Foreground" Value="#FFFFFF"/>
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ComboBox.Resources>
-                </ComboBox>
-                <TextBlock x:Name="StatusText" Foreground="#888888" FontSize="11"
-                           VerticalAlignment="Center" Margin="12,0,0,0"/>
-            </StackPanel>
-        </Border>
-
-        <!-- WebView2 content area -->
-        <Border x:Name="ContentArea" Grid.Row="1" Background="#1B1A19">
+        WindowStartupLocation="CenterScreen">
+    <DockPanel>
+        <ToolBar DockPanel.Dock="Top">
+            <TextBlock Text="Instance:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+            <ComboBox x:Name="InstanceCombo" Width="200"
+                      SelectionChanged="InstanceCombo_SelectionChanged"/>
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="8,0,0,0"/>
+        </ToolBar>
+        <Border x:Name="ContentArea">
             <TextBlock Text="Select an instance to inspect"
-                       Foreground="#555555" FontSize="14"
                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Border>
-    </Grid>
+    </DockPanel>
 </Window>

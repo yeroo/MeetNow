@@ -38,9 +38,6 @@ namespace MeetNow
                 ContentArea.Child = new TextBlock
                 {
                     Text = "Select an instance to inspect",
-                    Foreground = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(0x55, 0x55, 0x55)),
-                    FontSize = 14,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 };
