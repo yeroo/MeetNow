@@ -560,7 +560,11 @@ namespace MeetNow
             if (sender is MenuItem menuItem && menuItem.Tag is TeamsMeeting meeting)
             {
                 Log.Information("Starting meeting: {Time} - {Subject} URL=[{Url}]", meeting.Start.ToString("HH:mm"), meeting.Subject, meeting.TeamsUrl);
-                OutlookHelper.StartTeamsMeeting(meeting.TeamsUrl);
+                if (!string.IsNullOrEmpty(meeting.TeamsUrl)
+                    && meeting.TeamsUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    OutlookHelper.StartTeamsMeeting(meeting.TeamsUrl);
+                }
             }
         }
         public static void SchedulePopup(DateTime startTime, List<TeamsMeeting> subjects)
