@@ -1,7 +1,6 @@
 using Serilog;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Threading;
@@ -10,8 +9,8 @@ namespace MeetNow.Tasks
 {
     /// <summary>
     /// Persistent listener on a dedicated CalendarMonitor WebViewInstance.
-    /// Passively intercepts OWA API responses to capture calendar events.
-    /// Refreshes by re-navigating to Outlook calendar every 15 min.
+    /// Reads calendar events from the Outlook web calendar DOM after page loads.
+    /// Refreshes by re-navigating every 15 min.
     /// </summary>
     public static class CalendarCollectorTask
     {
@@ -19,7 +18,6 @@ namespace MeetNow.Tasks
         private static TeamsMeeting[] _lastCollected = Array.Empty<TeamsMeeting>();
         private static WebViewInstance? _instance;
         private static DispatcherTimer? _refreshTimer;
-        private static readonly List<TeamsMeeting> _capturedMeetings = new();
 
         public static TeamsMeeting[] LastCollectedMeetings
         {
@@ -33,11 +31,10 @@ namespace MeetNow.Tasks
         public static void StartListening(WebViewInstance instance)
         {
             _instance = instance;
-            _instance.ResponseReceived += OnResponseReceived;
 
-            // Flush captured meetings after initial page load (20s warmup)
+            // Parse DOM after initial page load (20s warmup for page to render)
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
-            _refreshTimer.Tick += OnFirstFlush;
+            _refreshTimer.Tick += OnFirstParse;
             _refreshTimer.Start();
 
             Log.Information("CalendarCollectorTask: listening on [{Name}]", instance.Name);
@@ -47,29 +44,22 @@ namespace MeetNow.Tasks
         {
             _refreshTimer?.Stop();
             _refreshTimer = null;
-
-            if (_instance != null)
-            {
-                _instance.ResponseReceived -= OnResponseReceived;
-                _instance = null;
-            }
-
+            _instance = null;
             Log.Information("CalendarCollectorTask: stopped listening");
         }
 
-        private static void OnFirstFlush(object? sender, EventArgs e)
+        private static async void OnFirstParse(object? sender, EventArgs e)
         {
-            // First flush after warmup — store whatever we captured
-            FlushCaptured();
+            await ParseCalendarDomAsync();
 
             // Switch to 15-min refresh cycle
             _refreshTimer!.Stop();
             _refreshTimer.Interval = TimeSpan.FromMinutes(15);
-            _refreshTimer.Tick -= OnFirstFlush;
+            _refreshTimer.Tick -= OnFirstParse;
             _refreshTimer.Tick += OnRefreshTick;
             _refreshTimer.Start();
 
-            Log.Information("CalendarCollectorTask: initial flush done, switching to 15-min refresh");
+            Log.Information("CalendarCollectorTask: initial parse done, switching to 15-min refresh");
         }
 
         private static async void OnRefreshTick(object? sender, EventArgs e)
@@ -80,11 +70,7 @@ namespace MeetNow.Tasks
             {
                 Log.Information("CalendarCollectorTask: refreshing calendar");
 
-                // Clear buffer for fresh capture
-                lock (_capturedMeetings)
-                    _capturedMeetings.Clear();
-
-                // Re-navigate to trigger fresh API calls
+                // Re-navigate to get fresh data
                 await _instance.NavigateAndWaitAsync("https://outlook.cloud.microsoft/calendar/view/day");
 
                 // Check for auth redirect
@@ -95,9 +81,9 @@ namespace MeetNow.Tasks
                     return;
                 }
 
-                // Wait for API calls, then flush
-                await Task.Delay(15000);
-                FlushCaptured();
+                // Wait for page to render, then parse DOM
+                await Task.Delay(10000);
+                await ParseCalendarDomAsync();
             }
             catch (Exception ex)
             {
@@ -105,284 +91,230 @@ namespace MeetNow.Tasks
             }
         }
 
-        private static void FlushCaptured()
+        private static async Task ParseCalendarDomAsync()
         {
-            lock (_capturedMeetings)
+            if (_instance == null) return;
+
+            try
             {
-                if (_capturedMeetings.Count > 0)
+                // Extract calendar events from the rendered Outlook calendar DOM
+                var js = @"
+(function() {
+    try {
+        var events = [];
+
+        // OWA day view renders calendar items as div elements with aria-label
+        // containing subject, time, and other details
+        var calItems = document.querySelectorAll('[data-app-section=""CalendarItemPart""]');
+
+        // Fallback: try aria-label on calendar surface items
+        if (calItems.length === 0) {
+            calItems = document.querySelectorAll('[class*=""calendarItem""], [class*=""CalendarItem""], [class*=""calendar-item""]');
+        }
+
+        // Broader fallback: items with role=""button"" inside the calendar surface
+        if (calItems.length === 0) {
+            var surface = document.querySelector('[class*=""calendarSurface""], [class*=""CalendarSurface""], [role=""main""]');
+            if (surface) {
+                calItems = surface.querySelectorAll('[role=""button""][aria-label]');
+            }
+        }
+
+        // Even broader: any element with aria-label that looks like a calendar event
+        if (calItems.length === 0) {
+            var all = document.querySelectorAll('[aria-label]');
+            var filtered = [];
+            for (var i = 0; i < all.length; i++) {
+                var label = all[i].getAttribute('aria-label') || '';
+                // Calendar events typically have time patterns like ""10:00"" or ""2:00 PM""
+                if (/\d{1,2}:\d{2}/.test(label) && label.length > 15 && label.length < 500) {
+                    filtered.push(all[i]);
+                }
+            }
+            calItems = filtered;
+        }
+
+        for (var i = 0; i < calItems.length; i++) {
+            var el = calItems[i];
+            var ariaLabel = el.getAttribute('aria-label') || '';
+            var innerText = el.innerText || '';
+
+            // Try to extract subject and times from aria-label
+            // Typical format: ""Subject, Start time End time, Location, Organizer""
+            // or ""Subject, Monday, March 24, 2026, 4:00 PM 4:30 PM""
+            var event = {
+                ariaLabel: ariaLabel.substring(0, 500),
+                text: innerText.substring(0, 500),
+                tag: el.tagName,
+                classes: (el.className || '').substring(0, 200)
+            };
+
+            // Try to find subject text element inside
+            var subjectEl = el.querySelector('[class*=""subject""], [class*=""Subject""], [class*=""title""], [class*=""Title""]');
+            if (subjectEl) event.subject = subjectEl.textContent.trim();
+
+            // Try to find time text
+            var timeEl = el.querySelector('[class*=""time""], [class*=""Time""], [class*=""duration""]');
+            if (timeEl) event.time = timeEl.textContent.trim();
+
+            // Try to find location
+            var locEl = el.querySelector('[class*=""location""], [class*=""Location""]');
+            if (locEl) event.location = locEl.textContent.trim();
+
+            events.push(event);
+        }
+
+        return JSON.stringify({
+            count: events.length,
+            url: window.location.href,
+            title: document.title,
+            events: events
+        });
+    } catch(e) {
+        return JSON.stringify({ error: e.message, url: window.location.href });
+    }
+})();";
+
+                var resultJson = await _instance.EvaluateJsAsync(js);
+                if (resultJson == null)
+                {
+                    Log.Warning("CalendarCollectorTask: DOM parse returned null");
+                    return;
+                }
+
+                Log.Information("CalendarCollectorTask: DOM result: {Result}",
+                    resultJson.Length > 2000 ? resultJson[..2000] + "..." : resultJson);
+
+                using var doc = JsonDocument.Parse(resultJson);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("error", out var err))
+                {
+                    Log.Warning("CalendarCollectorTask: DOM parse error: {Error}", err.GetString());
+                    return;
+                }
+
+                if (!root.TryGetProperty("events", out var eventsArr))
+                    return;
+
+                var meetings = new List<TeamsMeeting>();
+                var today = DateTime.Today;
+
+                foreach (var evt in eventsArr.EnumerateArray())
+                {
+                    var meeting = ParseDomEvent(evt, today);
+                    if (meeting != null)
+                        meetings.Add(meeting);
+                }
+
+                Log.Information("CalendarCollectorTask: parsed {Count} meetings from DOM", meetings.Count);
+
+                if (meetings.Count > 0)
                 {
                     lock (_lock)
                     {
-                        _lastCollected = _capturedMeetings.ToArray();
-                    }
-                    Log.Information("CalendarCollectorTask: flushed {Count} meetings", _capturedMeetings.Count);
-                }
-                else
-                {
-                    Log.Information("CalendarCollectorTask: no meetings captured this cycle");
-                }
-            }
-        }
-
-        private static void OnResponseReceived(string uri, string? body, IDictionary<string, string> headers)
-        {
-            if (body == null) return;
-
-            lock (_capturedMeetings)
-            {
-                TryParseCalendarEvents(uri, body, _capturedMeetings);
-            }
-        }
-
-        // ---- Kept: RunAsync for backward compat (transient one-shot) ----
-
-        public static async Task RunAsync(WebViewInstance instance)
-        {
-            Log.Information("CalendarCollectorTask: starting one-shot calendar collection");
-
-            var capturedMeetings = new List<TeamsMeeting>();
-
-            void onResponse(string uri, string? body, IDictionary<string, string> headers)
-            {
-                if (body == null) return;
-                TryParseCalendarEvents(uri, body, capturedMeetings);
-            }
-
-            instance.ResponseReceived += onResponse;
-
-            try
-            {
-                await instance.NavigateAndWaitAsync("https://outlook.cloud.microsoft/calendar/view/day");
-
-                if (instance.CurrentUrl != null &&
-                    instance.CurrentUrl.Contains("login.microsoftonline.com", StringComparison.OrdinalIgnoreCase))
-                {
-                    Log.Warning("CalendarCollectorTask: auth redirect detected, aborting");
-                    return;
-                }
-
-                await Task.Delay(15000);
-
-                Log.Information("CalendarCollectorTask: captured {Count} meetings from OWA",
-                    capturedMeetings.Count);
-
-                if (capturedMeetings.Count > 0)
-                {
-                    lock (_lock)
-                    {
-                        _lastCollected = capturedMeetings.ToArray();
+                        _lastCollected = meetings.ToArray();
                     }
                 }
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "CalendarCollectorTask: collection failed");
-            }
-            finally
-            {
-                instance.ResponseReceived -= onResponse;
+                Log.Warning(ex, "CalendarCollectorTask: DOM parse failed");
             }
         }
 
-        // ---- Parsers (unchanged) ----
-
-        private static void TryParseCalendarEvents(string uri, string body, List<TeamsMeeting> meetings)
+        private static TeamsMeeting? ParseDomEvent(JsonElement evt, DateTime today)
         {
             try
             {
-                // OWA service.svc calendar responses
-                if (uri.Contains("service.svc", StringComparison.OrdinalIgnoreCase)
-                    && body.Contains("\"Subject\"", StringComparison.OrdinalIgnoreCase)
-                    && body.Contains("\"Start\"", StringComparison.OrdinalIgnoreCase))
+                // Get subject from explicit element or aria-label
+                var subject = evt.TryGetProperty("subject", out var subj) ? subj.GetString() : null;
+                var ariaLabel = evt.TryGetProperty("ariaLabel", out var al) ? al.GetString() ?? "" : "";
+                var text = evt.TryGetProperty("text", out var tx) ? tx.GetString() ?? "" : "";
+                var timeText = evt.TryGetProperty("time", out var tt) ? tt.GetString() : null;
+
+                // If no explicit subject, try first line of text or first part of aria-label
+                if (string.IsNullOrWhiteSpace(subject))
                 {
-                    ParseOwaServiceResponse(body, meetings);
-                    return;
+                    // Try first line of innerText
+                    var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    if (lines.Length > 0)
+                        subject = lines[0].Trim();
                 }
 
-                // OWA startupdata.ashx
-                if (uri.Contains("startupdata.ashx", StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrWhiteSpace(subject))
                 {
-                    ParseOwaStartupData(body, meetings);
-                    return;
+                    // Try first part of aria-label (before first comma with time)
+                    var parts = ariaLabel.Split(',');
+                    if (parts.Length > 0)
+                        subject = parts[0].Trim();
                 }
 
-                // Graph-style calendarview responses
-                if ((uri.Contains("/calendarview", StringComparison.OrdinalIgnoreCase)
-                     || uri.Contains("/api/calendar/", StringComparison.OrdinalIgnoreCase))
-                    && body.Contains("\"subject\"", StringComparison.OrdinalIgnoreCase))
-                {
-                    ParseGraphCalendarResponse(body, meetings);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "CalendarCollectorTask: failed to parse calendar response from {Uri}", uri);
-            }
-        }
-
-        private static void ParseOwaServiceResponse(string body, List<TeamsMeeting> meetings)
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(body);
-                var root = doc.RootElement;
-
-                if (!root.TryGetProperty("Body", out var responseBody)) return;
-                if (!responseBody.TryGetProperty("ResponseMessages", out var responseMessages)) return;
-                if (!responseMessages.TryGetProperty("Items", out var items)) return;
-
-                foreach (var item in items.EnumerateArray())
-                {
-                    if (!item.TryGetProperty("CalendarView", out var calendarView)) continue;
-                    if (!calendarView.TryGetProperty("Items", out var events)) continue;
-
-                    foreach (var evt in events.EnumerateArray())
-                    {
-                        var meeting = ParseOwaEvent(evt);
-                        if (meeting != null)
-                            meetings.Add(meeting);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "CalendarCollectorTask: failed to parse OWA service response");
-            }
-        }
-
-        private static void ParseOwaStartupData(string body, List<TeamsMeeting> meetings)
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(body);
-                var root = doc.RootElement;
-
-                if (root.TryGetProperty("calendarEvents", out var events))
-                {
-                    foreach (var evt in events.EnumerateArray())
-                    {
-                        var meeting = ParseOwaEvent(evt);
-                        if (meeting != null)
-                            meetings.Add(meeting);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "CalendarCollectorTask: failed to parse OWA startup data");
-            }
-        }
-
-        private static void ParseGraphCalendarResponse(string body, List<TeamsMeeting> meetings)
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(body);
-                var root = doc.RootElement;
-
-                JsonElement eventsArray;
-                if (root.TryGetProperty("value", out var val))
-                    eventsArray = val;
-                else if (root.ValueKind == JsonValueKind.Array)
-                    eventsArray = root;
-                else
-                    return;
-
-                foreach (var evt in eventsArray.EnumerateArray())
-                {
-                    var subject = evt.TryGetProperty("subject", out var s) ? s.GetString() : null;
-                    if (string.IsNullOrWhiteSpace(subject)) continue;
-
-                    DateTime start = default, end = default;
-                    if (evt.TryGetProperty("start", out var startObj))
-                    {
-                        var startStr = startObj.TryGetProperty("dateTime", out var dt) ? dt.GetString() : null;
-                        if (startStr != null) DateTime.TryParse(startStr, out start);
-                    }
-                    if (evt.TryGetProperty("end", out var endObj))
-                    {
-                        var endStr = endObj.TryGetProperty("dateTime", out var dt) ? dt.GetString() : null;
-                        if (endStr != null) DateTime.TryParse(endStr, out end);
-                    }
-
-                    string? joinUrl = null;
-                    if (evt.TryGetProperty("onlineMeetingUrl", out var omu) && omu.ValueKind == JsonValueKind.String)
-                        joinUrl = omu.GetString();
-                    if (joinUrl == null && evt.TryGetProperty("onlineMeeting", out var om)
-                        && om.TryGetProperty("joinUrl", out var ju))
-                        joinUrl = ju.GetString();
-
-                    meetings.Add(new TeamsMeeting
-                    {
-                        Subject = subject,
-                        Start = start,
-                        End = end,
-                        TeamsUrl = joinUrl ?? ""
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "CalendarCollectorTask: failed to parse Graph calendar response");
-            }
-        }
-
-        private static TeamsMeeting? ParseOwaEvent(JsonElement evt)
-        {
-            try
-            {
-                var subject = evt.TryGetProperty("Subject", out var s) ? s.GetString() : null;
                 if (string.IsNullOrWhiteSpace(subject)) return null;
 
+                // Parse times from aria-label or time text
                 DateTime start = default, end = default;
+                var timeSource = timeText ?? ariaLabel;
+                ParseTimes(timeSource, today, out start, out end);
 
-                if (evt.TryGetProperty("Start", out var startProp))
+                // Location
+                var location = evt.TryGetProperty("location", out var loc) ? loc.GetString() : null;
+
+                // Check if Teams meeting (look for Teams URL in aria-label or text)
+                string? teamsUrl = null;
+                var fullText = ariaLabel + " " + text;
+                var teamsIdx = fullText.IndexOf("teams.microsoft.com", StringComparison.OrdinalIgnoreCase);
+                if (teamsIdx >= 0)
                 {
-                    if (startProp.ValueKind == JsonValueKind.String)
-                        DateTime.TryParse(startProp.GetString(), out start);
-                    else if (startProp.TryGetProperty("DateTime", out var dt))
-                        DateTime.TryParse(dt.GetString(), out start);
+                    // Try to extract URL
+                    var urlStart = fullText.LastIndexOf("https://", teamsIdx, StringComparison.OrdinalIgnoreCase);
+                    if (urlStart >= 0)
+                    {
+                        var urlEnd = fullText.IndexOfAny(new[] { ' ', '\n', '\r', '"', '\'' }, urlStart);
+                        if (urlEnd < 0) urlEnd = fullText.Length;
+                        teamsUrl = fullText[urlStart..urlEnd];
+                    }
                 }
-                if (evt.TryGetProperty("End", out var endProp))
-                {
-                    if (endProp.ValueKind == JsonValueKind.String)
-                        DateTime.TryParse(endProp.GetString(), out end);
-                    else if (endProp.TryGetProperty("DateTime", out var dt))
-                        DateTime.TryParse(dt.GetString(), out end);
-                }
-
-                string? joinUrl = null;
-
-                if (evt.TryGetProperty("OnlineMeetingJoinUrl", out var omju) && omju.ValueKind == JsonValueKind.String)
-                    joinUrl = omju.GetString();
-
-                if (joinUrl == null && evt.TryGetProperty("Location", out var loc))
-                {
-                    var locStr = loc.ValueKind == JsonValueKind.String ? loc.GetString()
-                        : (loc.TryGetProperty("DisplayName", out var dn) ? dn.GetString() : null);
-                    if (locStr != null && locStr.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase))
-                        joinUrl = locStr;
-                }
-
-                var organizer = evt.TryGetProperty("Organizer", out var org)
-                    && org.TryGetProperty("EmailAddress", out var ea)
-                    && ea.TryGetProperty("Name", out var orgName) ? orgName.GetString() : null;
 
                 return new TeamsMeeting
                 {
                     Subject = subject,
                     Start = start,
                     End = end,
-                    TeamsUrl = joinUrl ?? "",
-                    Organizer = organizer,
-                    Location = evt.TryGetProperty("Location", out var l)
-                        && l.TryGetProperty("DisplayName", out var ldn) ? ldn.GetString() : null
+                    TeamsUrl = teamsUrl ?? "",
+                    Location = location
                 };
             }
             catch (Exception ex)
             {
-                Log.Debug(ex, "CalendarCollectorTask: failed to parse individual OWA event");
+                Log.Debug(ex, "CalendarCollectorTask: failed to parse DOM event");
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Parse time strings like "4:00 PM 4:30 PM", "16:00 16:30",
+        /// or "4:00 PM - 4:30 PM" from the given text.
+        /// </summary>
+        private static void ParseTimes(string text, DateTime today, out DateTime start, out DateTime end)
+        {
+            start = default;
+            end = default;
+
+            // Find all time patterns (HH:mm or h:mm AM/PM)
+            var timePattern = new System.Text.RegularExpressions.Regex(
+                @"(\d{1,2}:\d{2}\s*(?:AM|PM)?)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            var matches = timePattern.Matches(text);
+            if (matches.Count >= 1)
+            {
+                if (DateTime.TryParse(matches[0].Value.Trim(), out var t1))
+                    start = today.Add(t1.TimeOfDay);
+            }
+            if (matches.Count >= 2)
+            {
+                if (DateTime.TryParse(matches[1].Value.Trim(), out var t2))
+                    end = today.Add(t2.TimeOfDay);
             }
         }
     }
