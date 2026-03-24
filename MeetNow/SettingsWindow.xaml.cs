@@ -44,6 +44,8 @@ namespace MeetNow
             // Outlook source
             if (settings.OutlookSource == "Classic")
                 OutlookSourceClassic.IsChecked = true;
+            else if (settings.OutlookSource == "WebView")
+                OutlookSourceWebView.IsChecked = true;
             else
                 OutlookSourceNew.IsChecked = true;
             UpdateOutlookSourceStatus();
@@ -110,7 +112,8 @@ namespace MeetNow
         private void OutlookSource_Changed(object sender, RoutedEventArgs e)
         {
             if (!IsLoaded) return; // skip during initialization
-            var source = OutlookSourceClassic.IsChecked == true ? "Classic" : "New";
+            var source = OutlookSourceClassic.IsChecked == true ? "Classic"
+                : OutlookSourceWebView.IsChecked == true ? "WebView" : "New";
             MeetNowSettings.Instance.OutlookSource = source;
             MeetNowSettings.Instance.Save();
             UpdateOutlookSourceStatus();
@@ -119,6 +122,19 @@ namespace MeetNow
         private void UpdateOutlookSourceStatus()
         {
             var source = MeetNowSettings.Instance.OutlookSource;
+
+            if (source == "WebView")
+            {
+                var isReady = WebViewManager.Instance.IsInitialized;
+                OutlookSourceStatus.Text = isReady
+                    ? "WebView2 is active — calendar data from Outlook web"
+                    : "WebView2 not initialized — enable 'Show Teams WebView' and restart";
+                OutlookSourceStatus.Foreground = isReady
+                    ? new SolidColorBrush(Color.FromRgb(0x8F, 0xF0, 0x8F))
+                    : new SolidColorBrush(Color.FromRgb(0xFF, 0x88, 0x88));
+                return;
+            }
+
             bool isRunning;
             string processName;
             if (source == "Classic")

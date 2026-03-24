@@ -51,11 +51,13 @@ namespace MeetNow
             Model = new MainWindowModel();
             JobManager.Initialize();
             InitializeComponent();
-            CheckOutlookRunning();
+            if (MeetNowSettings.Instance.OutlookSource != "WebView")
+                CheckOutlookRunning();
             SetupTimer();
             StartTeamsMonitor();
             QueueOverlay.Initialize();
-            if (MeetNowSettings.Instance.ShowTeamsWebView)
+            if (MeetNowSettings.Instance.ShowTeamsWebView
+                || MeetNowSettings.Instance.OutlookSource == "WebView")
             {
                 InitializeWebViewManager();
             }
@@ -447,7 +449,10 @@ namespace MeetNow
                 else
                 {
                     // Fallback: direct source access (aggregator not yet initialized)
-                    if (MeetNowSettings.Instance.OutlookSource == "New")
+                    var source = MeetNowSettings.Instance.OutlookSource;
+                    if (source == "WebView")
+                        meetings = Tasks.CalendarCollectorTask.LastCollectedMeetings;
+                    else if (source == "New")
                         meetings = OutlookCacheReader.GetTodaysMeetings(now);
                     else
                     {

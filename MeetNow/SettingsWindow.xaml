@@ -72,6 +72,9 @@
                              Foreground="#DDD" FontSize="13" Margin="0,0,20,0"
                              GroupName="OutlookSource" Checked="OutlookSource_Changed"/>
                 <RadioButton x:Name="OutlookSourceClassic" Content="Classic Outlook"
+                             Foreground="#DDD" FontSize="13" Margin="0,0,20,0"
+                             GroupName="OutlookSource" Checked="OutlookSource_Changed"/>
+                <RadioButton x:Name="OutlookSourceWebView" Content="WebView"
                              Foreground="#DDD" FontSize="13"
                              GroupName="OutlookSource" Checked="OutlookSource_Changed"/>
             </StackPanel>

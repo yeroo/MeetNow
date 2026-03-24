@@ -14,8 +14,21 @@ namespace MeetNow
         {
             var allMeetings = new List<TeamsMeeting>();
 
-            // Source 1: OutlookCacheReader (LevelDB from New Outlook)
-            if (outlookSource == "New")
+            if (outlookSource == "WebView")
+            {
+                // WebView-only: calendar data comes from CalendarCollectorTask
+                try
+                {
+                    var webViewMeetings = Tasks.CalendarCollectorTask.LastCollectedMeetings;
+                    Log.Debug("CalendarCollectorTask returned {Count} cached meetings", webViewMeetings.Length);
+                    allMeetings.AddRange(webViewMeetings);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "CalendarCollectorTask cache read failed");
+                }
+            }
+            else if (outlookSource == "New")
             {
                 try
                 {
@@ -41,18 +54,6 @@ namespace MeetNow
                 {
                     Log.Warning(ex, "OutlookHelper failed");
                 }
-            }
-
-            // Source 2: CalendarCollectorTask cached meetings (from WebViewManager)
-            try
-            {
-                var webViewMeetings = Tasks.CalendarCollectorTask.LastCollectedMeetings;
-                Log.Debug("CalendarCollectorTask returned {Count} cached meetings", webViewMeetings.Length);
-                allMeetings.AddRange(webViewMeetings);
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "CalendarCollectorTask cache read failed");
             }
 
             // Deduplicate
