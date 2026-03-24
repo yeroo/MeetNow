@@ -6,7 +6,7 @@ namespace MeetNow
 {
     public partial class DebugViewerWindow : Window
     {
-        private WebViewInstance? _currentlyShowing;
+        private WebViewInstance? _currentInstance;
 
         public DebugViewerWindow()
         {
@@ -29,42 +29,60 @@ namespace MeetNow
 
         private void InstanceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            // Move previously shown instance back offscreen
-            if (_currentlyShowing?.HostWindow != null)
-            {
-                _currentlyShowing.HostWindow.Left = -10000;
-                _currentlyShowing.HostWindow.Top = -10000;
-                _currentlyShowing = null;
-            }
+            // Return previous WebView2 to its offscreen host
+            DetachCurrent();
 
             var selected = InstanceCombo.SelectedItem as string;
-            if (string.IsNullOrEmpty(selected) || selected == "(none)") return;
+            if (string.IsNullOrEmpty(selected) || selected == "(none)")
+            {
+                ContentArea.Child = new TextBlock
+                {
+                    Text = "Select an instance to inspect",
+                    Foreground = new System.Windows.Media.SolidColorBrush(
+                        System.Windows.Media.Color.FromRgb(0x55, 0x55, 0x55)),
+                    FontSize = 14,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                StatusText.Text = "";
+                return;
+            }
 
             var instance = WebViewManager.Instance.ActiveInstances
                 .FirstOrDefault(i => i.Name == selected);
 
-            if (instance?.HostWindow != null)
+            if (instance?.HostWindow == null)
             {
-                // Move the instance host window on-screen, centered
-                var screen = SystemParameters.WorkArea;
-                instance.HostWindow.Left = (screen.Width - instance.HostWindow.Width) / 2;
-                instance.HostWindow.Top = (screen.Height - instance.HostWindow.Height) / 2;
-                instance.HostWindow.Topmost = true;
-                instance.HostWindow.Topmost = false;
-                _currentlyShowing = instance;
+                StatusText.Text = "Instance not available";
+                return;
             }
+
+            // Steal the WebView2 from the offscreen host window
+            var webView = instance.HostWindow.Content as UIElement;
+            if (webView != null)
+            {
+                instance.HostWindow.Content = null; // detach from host
+                ContentArea.Child = webView;        // attach here
+                _currentInstance = instance;
+                StatusText.Text = instance.CurrentUrl ?? "Loading...";
+            }
+        }
+
+        private void DetachCurrent()
+        {
+            if (_currentInstance?.HostWindow == null) return;
+
+            // Return WebView2 to its offscreen host window
+            var webView = ContentArea.Child;
+            ContentArea.Child = null;
+            _currentInstance.HostWindow.Content = webView;
+            _currentInstance = null;
         }
 
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
-            // Move any shown instance back offscreen before hiding
-            if (_currentlyShowing?.HostWindow != null)
-            {
-                _currentlyShowing.HostWindow.Left = -10000;
-                _currentlyShowing.HostWindow.Top = -10000;
-                _currentlyShowing = null;
-            }
-
+            DetachCurrent();
+            InstanceCombo.SelectedIndex = 0;
             e.Cancel = true;
             Hide();
         }
