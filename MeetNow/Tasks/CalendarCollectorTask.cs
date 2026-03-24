@@ -332,40 +332,28 @@ namespace MeetNow.Tasks
 
                     if (copyRoot.TryGetProperty("clicked", out _))
                     {
-                        // "Copy meeting link" was clicked — URL should be in clipboard
-                        // Wait for the copy operation to complete
+                        // "Copy meeting link" was clicked — URL is now in system clipboard
                         await Task.Delay(1000);
 
-                        // Try reading clipboard via navigator.clipboard API
-                        var clipboardUrl = await _instance.EvaluateJsAsync(
-                            "(async function() { try { return await navigator.clipboard.readText(); } catch(e) { return 'clipboard_error:' + e.message; } })();");
+                        // Read from system clipboard via WPF (JS clipboard API is blocked in offscreen WebView)
+                        string? clipboardUrl = null;
+                        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            try
+                            {
+                                if (System.Windows.Clipboard.ContainsText())
+                                    clipboardUrl = System.Windows.Clipboard.GetText();
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Debug(ex, "CalendarCollectorTask: clipboard read failed");
+                            }
+                        });
+
                         Log.Information("CalendarCollectorTask: clipboard for [{Subject}]: {Url}", subject, clipboardUrl ?? "null");
 
                         if (clipboardUrl != null && clipboardUrl.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase))
                             joinUrl = clipboardUrl;
-
-                        // Fallback: try pasting into a hidden textarea
-                        if (joinUrl == null)
-                        {
-                            var pasteUrl = await _instance.EvaluateJsAsync(@"
-(function() {
-    try {
-        var ta = document.createElement('textarea');
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.focus();
-        document.execCommand('paste');
-        var text = ta.value;
-        document.body.removeChild(ta);
-        return text || null;
-    } catch(e) { return null; }
-})();");
-                            Log.Information("CalendarCollectorTask: paste fallback for [{Subject}]: {Url}", subject, pasteUrl ?? "null");
-
-                            if (pasteUrl != null && pasteUrl.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase))
-                                joinUrl = pasteUrl;
-                        }
                     }
                 }
 
