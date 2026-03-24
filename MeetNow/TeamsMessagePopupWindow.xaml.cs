@@ -28,6 +28,21 @@ namespace MeetNow
 
             _soundTimer = new DispatcherTimer();
             _soundTimer.Tick += OnSoundTimerTick;
+            SizeChanged += OnSizeChanged;
+        }
+
+        private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            RepositionToBottomRight();
+        }
+
+        private void RepositionToBottomRight()
+        {
+            var workArea = SystemParameters.WorkArea;
+            Left = workArea.Right - Width;
+            // Leave room for the Autopilot OFF button when autopilot is active
+            var bottomOffset = AutopilotOverlay.IsActive ? 50 : 0;
+            Top = workArea.Bottom - ActualHeight - bottomOffset;
         }
 
         /// <summary>
@@ -46,12 +61,8 @@ namespace MeetNow
                     _instance = new TeamsMessagePopupWindow();
                     _instance._firstAlertTime = DateTime.Now;
 
-                    // Position bottom-right
-                    var workArea = SystemParameters.WorkArea;
-                    _instance.Left = workArea.Right - _instance.Width;
-                    _instance.Top = workArea.Bottom - 300;
-
                     _instance.Show();
+                    _instance.RepositionToBottomRight();
                     _instance.StartSoundTimer();
                 }
 
@@ -156,10 +167,6 @@ namespace MeetNow
         private void UpdateCount()
         {
             MessageCountText.Text = _messages.Count > 1 ? $"{_messages.Count} messages" : "";
-
-            // Reposition if window height changed
-            var workArea = SystemParameters.WorkArea;
-            Left = workArea.Right - Width;
         }
 
         private void DismissClick(object sender, RoutedEventArgs e)
