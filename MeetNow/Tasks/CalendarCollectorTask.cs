@@ -288,32 +288,98 @@ namespace MeetNow.Tasks
                 // Step 2: Wait for detail panel to load
                 await Task.Delay(3000);
 
-                // Step 3: Search for Teams URL in the page
+                // Step 3: Click the Join button's dropdown arrow to reveal the join link
+                var dropdownJs = @"
+(function() {
+    try {
+        // Find the Join split button dropdown (small arrow part)
+        // OWA uses a split button: [Join] [v] — the dropdown is a separate button
+        var btns = document.querySelectorAll('button');
+        var joinFound = false;
+        for (var i = 0; i < btns.length; i++) {
+            var label = (btns[i].getAttribute('aria-label') || '').toLowerCase();
+            var text = (btns[i].textContent || '').toLowerCase().trim();
+
+            // Look for the dropdown arrow next to Join
+            if (label.indexOf('join') >= 0 && (label.indexOf('option') >= 0 || label.indexOf('drop') >= 0 || label.indexOf('more') >= 0 || label.indexOf('split') >= 0 || label.indexOf('chevron') >= 0)) {
+                btns[i].click();
+                return 'dropdown_clicked:' + label;
+            }
+        }
+
+        // Fallback: look for any button right after a Join button (split button pattern)
+        for (var i = 0; i < btns.length - 1; i++) {
+            var text = (btns[i].textContent || '').trim();
+            if (text === 'Join' || (btns[i].getAttribute('aria-label') || '').indexOf('Join') >= 0) {
+                // Click the next sibling button (the dropdown arrow)
+                var next = btns[i].nextElementSibling;
+                if (next && next.tagName === 'BUTTON') {
+                    next.click();
+                    return 'sibling_clicked';
+                }
+                // Or try the parent's next child
+                var parent = btns[i].parentElement;
+                if (parent) {
+                    var arrow = parent.querySelector('button:last-child');
+                    if (arrow && arrow !== btns[i]) {
+                        arrow.click();
+                        return 'parent_arrow_clicked';
+                    }
+                }
+                joinFound = true;
+            }
+        }
+
+        // Log what buttons we found for debugging
+        var allBtnInfo = [];
+        for (var i = 0; i < btns.length && allBtnInfo.length < 30; i++) {
+            var label = btns[i].getAttribute('aria-label') || '';
+            var text = (btns[i].textContent || '').trim();
+            if (label.indexOf('Join') >= 0 || label.indexOf('join') >= 0 || text.indexOf('Join') >= 0
+                || label.indexOf('oin') >= 0 || text === '') {
+                allBtnInfo.push({ i: i, label: label.substring(0, 80), text: text.substring(0, 40), tag: btns[i].tagName });
+            }
+        }
+        return 'no_dropdown:' + JSON.stringify(allBtnInfo);
+    } catch(e) { return 'error:' + e.message; }
+})();";
+
+                var dropdownResult = await _instance.EvaluateJsAsync(dropdownJs);
+                Log.Information("CalendarCollectorTask: dropdown result for [{Subject}]: {Result}",
+                    subject, dropdownResult);
+
+                // Wait for dropdown menu to appear
+                await Task.Delay(1500);
+
+                // Step 4: Search for Teams URL (now the dropdown might have revealed it)
                 var searchJs = @"
 (function() {
     try {
-        // Strategy 1: link with Teams URL
+        // Strategy 1: link with Teams URL anywhere on page
         var allLinks = document.querySelectorAll('a[href*=""teams.microsoft.com""]');
-        if (allLinks.length > 0) return JSON.stringify({ joinUrl: allLinks[0].href });
+        if (allLinks.length > 0) return JSON.stringify({ joinUrl: allLinks[0].href, source: 'link' });
 
-        // Strategy 2: Join button
-        var joinBtns = document.querySelectorAll('button[aria-label*=""Join""], a[aria-label*=""Join""]');
-        for (var j = 0; j < joinBtns.length; j++) {
-            var href = joinBtns[j].href || joinBtns[j].getAttribute('data-url') || '';
+        // Strategy 2: menu item with Copy join link or similar
+        var menuItems = document.querySelectorAll('[role=""menuitem""], [role=""option""], [class*=""menu""] button, [class*=""menu""] a');
+        for (var k = 0; k < menuItems.length; k++) {
+            var href = menuItems[k].href || menuItems[k].getAttribute('data-url') || '';
             if (href.indexOf('teams.microsoft.com') >= 0)
-                return JSON.stringify({ joinUrl: href });
+                return JSON.stringify({ joinUrl: href, source: 'menuitem' });
+            // If it says 'Copy join link', click it to put URL in clipboard
+            var itemText = (menuItems[k].textContent || '').toLowerCase();
+            if (itemText.indexOf('copy') >= 0 && itemText.indexOf('join') >= 0) {
+                menuItems[k].click();
+                return JSON.stringify({ copiedToClipboard: true, source: 'copy_join_link' });
+            }
         }
 
-        // Strategy 3: search detail panel HTML
-        var panel = document.querySelector('[role=""dialog""], [class*=""reading""]');
-        if (panel) {
-            var match = panel.innerHTML.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s]+/i);
-            if (match) return JSON.stringify({ joinUrl: match[0] });
-        }
+        // Strategy 3: search full page HTML for meetup-join URL
+        var fullMatch = document.body.innerHTML.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s\\]+/i);
+        if (fullMatch) return JSON.stringify({ joinUrl: fullMatch[0], source: 'html_search' });
 
-        // Strategy 4: full page search
-        var fullMatch = document.body.innerHTML.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s]+/i);
-        if (fullMatch) return JSON.stringify({ joinUrl: fullMatch[0] });
+        // Strategy 4: broader Teams URL search
+        var broadMatch = document.body.innerHTML.match(/https:\/\/teams\.microsoft\.com\/[^""'<\s\\]{20,}/i);
+        if (broadMatch) return JSON.stringify({ joinUrl: broadMatch[0], source: 'broad_search' });
 
         return JSON.stringify({ noUrl: true });
     } catch(e) { return JSON.stringify({ error: e.message }); }
