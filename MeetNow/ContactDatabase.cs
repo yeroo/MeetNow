@@ -100,6 +100,15 @@ namespace MeetNow
             }
         }
 
+        public static List<Contact> GetPendingEnrichment(int maxCount)
+        {
+            return _contacts.Values
+                .Where(c => c.EnrichmentStatus == EnrichmentStatus.Pending)
+                .OrderByDescending(c => c.LastSeenTimestamp)
+                .Take(maxCount)
+                .ToList();
+        }
+
         public static List<Contact> GetAll()
         {
             return _contacts.Values
