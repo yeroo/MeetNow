@@ -145,6 +145,9 @@ namespace MeetNow
 
                 // CalendarCollectorTask is now a persistent listener on its own
                 // dedicated WebViewInstance — started automatically by WebViewManager
+                // Trigger a meeting refresh when calendar data becomes available
+                Tasks.CalendarCollectorTask.MeetingsUpdated += () =>
+                    Dispatcher.Invoke(() => RefreshOutlookWithRetry(false, 1));
 
                 // Schedule PeopleEnricherTask every 30 min
                 WebViewManager.Instance.ScheduleTask("PeopleEnricher",

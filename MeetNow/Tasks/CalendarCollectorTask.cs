@@ -25,6 +25,11 @@ namespace MeetNow.Tasks
         }
 
         /// <summary>
+        /// Fired after meetings are parsed, so MainWindow can trigger a refresh.
+        /// </summary>
+        public static event Action? MeetingsUpdated;
+
+        /// <summary>
         /// Attach to a dedicated WebViewInstance as a persistent listener.
         /// Called once from WebViewManager.StartCalendarMonitorAsync().
         /// </summary>
@@ -208,6 +213,9 @@ namespace MeetNow.Tasks
                 }
 
                 Log.Information("CalendarCollectorTask: parsed {Count} meetings from DOM", meetings.Count);
+                foreach (var m in meetings)
+                    Log.Information("  Meeting: {Subject} {Start}-{End} TeamsUrl={Url}",
+                        m.Subject, m.Start.ToString("HH:mm"), m.End.ToString("HH:mm"), m.TeamsUrl);
 
                 if (meetings.Count > 0)
                 {
@@ -215,6 +223,7 @@ namespace MeetNow.Tasks
                     {
                         _lastCollected = meetings.ToArray();
                     }
+                    MeetingsUpdated?.Invoke();
                 }
             }
             catch (Exception ex)
