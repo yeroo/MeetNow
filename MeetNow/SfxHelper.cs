@@ -45,7 +45,8 @@ namespace MeetNow
             {
                 foreach (var playback in playbacks)
                 {
-                    playback.Stop();
+                    try { playback.Stop(); }
+                    catch (PlatformNotSupportedException) { /* Thread.Abort not supported in .NET 8 */ }
                 }
             }
         }

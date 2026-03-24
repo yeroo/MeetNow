@@ -17,11 +17,18 @@
                 <TextBlock Text="Instance:" Foreground="#CCCCCC" FontSize="12"
                            VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <ComboBox x:Name="InstanceCombo" Width="200" FontSize="12"
-                          SelectionChanged="InstanceCombo_SelectionChanged">
+                          SelectionChanged="InstanceCombo_SelectionChanged"
+                          Background="#3A3A3A" Foreground="#EEEEEE">
                     <ComboBox.Resources>
-                        <Style TargetType="ComboBox">
-                            <Setter Property="Background" Value="#3A3A3A"/>
+                        <Style TargetType="ComboBoxItem">
+                            <Setter Property="Background" Value="#2D2D2D"/>
                             <Setter Property="Foreground" Value="#EEEEEE"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsHighlighted" Value="True">
+                                    <Setter Property="Background" Value="#4A4A4A"/>
+                                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                                </Trigger>
+                            </Style.Triggers>
                         </Style>
                     </ComboBox.Resources>
                 </ComboBox>
