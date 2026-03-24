@@ -263,145 +263,101 @@ namespace MeetNow.Tasks
             {
                 var safeSubject = subject.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\"", "\\\"");
 
-                // Step 1: Click the meeting (sync)
-                var clickJs = $@"
+                // Step 1: Right-click the meeting to open context menu
+                var rightClickJs = $@"
 (function() {{
     try {{
         var items = document.querySelectorAll('[role=""button""][aria-label]');
         for (var i = 0; i < items.length; i++) {{
             var label = items[i].getAttribute('aria-label') || '';
             if (label.indexOf('{safeSubject}') >= 0) {{
-                items[i].click();
-                return 'clicked';
+                var rect = items[i].getBoundingClientRect();
+                var evt = new MouseEvent('contextmenu', {{
+                    bubbles: true, cancelable: true,
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.top + rect.height / 2,
+                    button: 2
+                }});
+                items[i].dispatchEvent(evt);
+                return 'context_menu_opened';
             }}
         }}
         return 'not_found';
     }} catch(e) {{ return 'error:' + e.message; }}
 }})();";
 
-                var clickResult = await _instance.EvaluateJsAsync(clickJs);
-                Log.Information("CalendarCollectorTask: click result for [{Subject}]: {Result}", subject, clickResult);
+                var clickResult = await _instance.EvaluateJsAsync(rightClickJs);
+                Log.Information("CalendarCollectorTask: right-click result for [{Subject}]: {Result}", subject, clickResult);
 
-                if (clickResult != "clicked")
-                    return capturedTeamsUrl; // element not found
+                if (clickResult != "context_menu_opened")
+                    return capturedTeamsUrl;
 
-                // Step 2: Wait for detail panel to load
-                await Task.Delay(3000);
-
-                // Step 3: Click the Join button's dropdown arrow to reveal the join link
-                var dropdownJs = @"
-(function() {
-    try {
-        // Find the Join split button dropdown (small arrow part)
-        // OWA uses a split button: [Join] [v] — the dropdown is a separate button
-        var btns = document.querySelectorAll('button');
-        var joinFound = false;
-        for (var i = 0; i < btns.length; i++) {
-            var label = (btns[i].getAttribute('aria-label') || '').toLowerCase();
-            var text = (btns[i].textContent || '').toLowerCase().trim();
-
-            // Look for the dropdown arrow next to Join
-            if (label.indexOf('join') >= 0 && (label.indexOf('option') >= 0 || label.indexOf('drop') >= 0 || label.indexOf('more') >= 0 || label.indexOf('split') >= 0 || label.indexOf('chevron') >= 0)) {
-                btns[i].click();
-                return 'dropdown_clicked:' + label;
-            }
-        }
-
-        // Fallback: look for any button right after a Join button (split button pattern)
-        for (var i = 0; i < btns.length - 1; i++) {
-            var text = (btns[i].textContent || '').trim();
-            if (text === 'Join' || (btns[i].getAttribute('aria-label') || '').indexOf('Join') >= 0) {
-                // Click the next sibling button (the dropdown arrow)
-                var next = btns[i].nextElementSibling;
-                if (next && next.tagName === 'BUTTON') {
-                    next.click();
-                    return 'sibling_clicked';
-                }
-                // Or try the parent's next child
-                var parent = btns[i].parentElement;
-                if (parent) {
-                    var arrow = parent.querySelector('button:last-child');
-                    if (arrow && arrow !== btns[i]) {
-                        arrow.click();
-                        return 'parent_arrow_clicked';
-                    }
-                }
-                joinFound = true;
-            }
-        }
-
-        // Log what buttons we found for debugging
-        var allBtnInfo = [];
-        for (var i = 0; i < btns.length && allBtnInfo.length < 30; i++) {
-            var label = btns[i].getAttribute('aria-label') || '';
-            var text = (btns[i].textContent || '').trim();
-            if (label.indexOf('Join') >= 0 || label.indexOf('join') >= 0 || text.indexOf('Join') >= 0
-                || label.indexOf('oin') >= 0 || text === '') {
-                allBtnInfo.push({ i: i, label: label.substring(0, 80), text: text.substring(0, 40), tag: btns[i].tagName });
-            }
-        }
-        return 'no_dropdown:' + JSON.stringify(allBtnInfo);
-    } catch(e) { return 'error:' + e.message; }
-})();";
-
-                var dropdownResult = await _instance.EvaluateJsAsync(dropdownJs);
-                Log.Information("CalendarCollectorTask: dropdown result for [{Subject}]: {Result}",
-                    subject, dropdownResult);
-
-                // Wait for dropdown menu to appear
+                // Step 2: Wait for context menu to appear
                 await Task.Delay(1500);
 
-                // Step 4: Search for Teams URL (now the dropdown might have revealed it)
-                var searchJs = @"
+                // Step 3: Find and click "Copy meeting link" in the context menu
+                var copyLinkJs = @"
 (function() {
     try {
-        // Strategy 1: link with Teams URL anywhere on page
-        var allLinks = document.querySelectorAll('a[href*=""teams.microsoft.com""]');
-        if (allLinks.length > 0) return JSON.stringify({ joinUrl: allLinks[0].href, source: 'link' });
-
-        // Strategy 2: menu item with Copy join link or similar
-        var menuItems = document.querySelectorAll('[role=""menuitem""], [role=""option""], [class*=""menu""] button, [class*=""menu""] a');
-        for (var k = 0; k < menuItems.length; k++) {
-            var href = menuItems[k].href || menuItems[k].getAttribute('data-url') || '';
-            if (href.indexOf('teams.microsoft.com') >= 0)
-                return JSON.stringify({ joinUrl: href, source: 'menuitem' });
-            // If it says 'Copy join link', click it to put URL in clipboard
-            var itemText = (menuItems[k].textContent || '').toLowerCase();
-            if (itemText.indexOf('copy') >= 0 && itemText.indexOf('join') >= 0) {
-                menuItems[k].click();
-                return JSON.stringify({ copiedToClipboard: true, source: 'copy_join_link' });
+        var menuItems = document.querySelectorAll('[role=""menuitem""], [role=""menuitemradio""], [role=""option""]');
+        var allItems = [];
+        for (var i = 0; i < menuItems.length; i++) {
+            var text = (menuItems[i].textContent || '').trim();
+            allItems.push(text.substring(0, 60));
+            // Match 'Copy meeting link' or similar
+            if (text.toLowerCase().indexOf('copy') >= 0 &&
+                (text.toLowerCase().indexOf('meeting link') >= 0 || text.toLowerCase().indexOf('join link') >= 0)) {
+                menuItems[i].click();
+                return JSON.stringify({ clicked: text, source: 'context_menu' });
             }
         }
-
-        // Strategy 3: search full page HTML for meetup-join URL
-        var fullMatch = document.body.innerHTML.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s\\]+/i);
-        if (fullMatch) return JSON.stringify({ joinUrl: fullMatch[0], source: 'html_search' });
-
-        // Strategy 4: broader Teams URL search
-        var broadMatch = document.body.innerHTML.match(/https:\/\/teams\.microsoft\.com\/[^""'<\s\\]{20,}/i);
-        if (broadMatch) return JSON.stringify({ joinUrl: broadMatch[0], source: 'broad_search' });
-
-        return JSON.stringify({ noUrl: true });
+        return JSON.stringify({ noMatch: true, items: allItems });
     } catch(e) { return JSON.stringify({ error: e.message }); }
 })();";
 
-                var resultJson = await _instance.EvaluateJsAsync(searchJs);
-                Log.Information("CalendarCollectorTask: search result for [{Subject}]: {Result}",
-                    subject, resultJson ?? "null");
+                var copyResult = await _instance.EvaluateJsAsync(copyLinkJs);
+                Log.Information("CalendarCollectorTask: copy link result for [{Subject}]: {Result}",
+                    subject, copyResult);
 
                 string? joinUrl = null;
 
-                if (resultJson != null)
+                if (copyResult != null)
                 {
-                    using var detailDoc = JsonDocument.Parse(resultJson);
-                    if (detailDoc.RootElement.TryGetProperty("joinUrl", out var ju))
-                        joinUrl = ju.GetString();
+                    using var copyDoc = JsonDocument.Parse(copyResult);
+                    var copyRoot = copyDoc.RootElement;
+
+                    if (copyRoot.TryGetProperty("clicked", out _))
+                    {
+                        // URL was copied to clipboard — read it
+                        await Task.Delay(500);
+                        var clipboardUrl = await _instance.EvaluateJsAsync(
+                            "(async function() { try { return await navigator.clipboard.readText(); } catch(e) { return null; } })();");
+
+                        if (clipboardUrl != null && clipboardUrl.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase))
+                            joinUrl = clipboardUrl;
+
+                        Log.Information("CalendarCollectorTask: clipboard for [{Subject}]: {Url}", subject, clipboardUrl ?? "null");
+                    }
                 }
 
-                // Fallback: network-captured URL
+                // Fallback: check network-captured URL
                 joinUrl ??= capturedTeamsUrl;
 
-                // Close the detail panel
+                // Fallback: search page HTML
+                if (joinUrl == null)
+                {
+                    var searchJs = @"
+(function() {
+    try {
+        var match = document.body.innerHTML.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s\\]+/i);
+        if (match) return match[0];
+        return null;
+    } catch(e) { return null; }
+})();";
+                    joinUrl = await _instance.EvaluateJsAsync(searchJs);
+                }
+
+                // Dismiss context menu
                 await _instance.EvaluateJsAsync(
                     "(function() { document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', keyCode: 27, bubbles: true})); return 'ok'; })();");
 
