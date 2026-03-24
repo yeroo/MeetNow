@@ -267,114 +267,74 @@ namespace MeetNow.Tasks
             {
                 var safeSubject = subject.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\"", "\\\"");
 
-                // Step 1: Right-click the meeting to open context menu
-                var rightClickJs = $@"
+                // Step 1: Click the meeting to open its detail/reading pane
+                var clickJs = $@"
 (function() {{
     try {{
         var items = document.querySelectorAll('[role=""button""][aria-label]');
         for (var i = 0; i < items.length; i++) {{
             var label = items[i].getAttribute('aria-label') || '';
             if (label.indexOf('{safeSubject}') >= 0) {{
-                var rect = items[i].getBoundingClientRect();
-                var evt = new MouseEvent('contextmenu', {{
-                    bubbles: true, cancelable: true,
-                    clientX: rect.left + rect.width / 2,
-                    clientY: rect.top + rect.height / 2,
-                    button: 2
-                }});
-                items[i].dispatchEvent(evt);
-                return 'context_menu_opened';
+                items[i].click();
+                return 'clicked';
             }}
         }}
         return 'not_found';
     }} catch(e) {{ return 'error:' + e.message; }}
 }})();";
 
-                var clickResult = await _instance.EvaluateJsAsync(rightClickJs);
-                Log.Information("CalendarCollectorTask: right-click result for [{Subject}]: {Result}", subject, clickResult);
+                var clickResult = await _instance.EvaluateJsAsync(clickJs);
+                Log.Information("CalendarCollectorTask: click result for [{Subject}]: {Result}", subject, clickResult);
 
-                if (clickResult != "context_menu_opened")
+                if (clickResult != "clicked")
                     return capturedTeamsUrl;
 
-                // Step 2: Wait for context menu to fully render
-                await Task.Delay(2500);
+                // Step 2: Wait for meeting detail to load
+                await Task.Delay(4000);
 
-                // Step 3: Find and click "Copy meeting link" in the context menu
-                var copyLinkJs = @"
+                // Step 3: Search the page for Teams join URL — it's in the meeting body HTML
+                var searchJs = @"
 (function() {
     try {
-        var menuItems = document.querySelectorAll('[role=""menuitem""], [role=""menuitemradio""], [role=""option""]');
-        var allItems = [];
-        for (var i = 0; i < menuItems.length; i++) {
-            var text = (menuItems[i].textContent || '').trim();
-            allItems.push(text.substring(0, 60));
-            // Match 'Copy meeting link' or similar
-            if (text.toLowerCase().indexOf('copy') >= 0 &&
-                (text.toLowerCase().indexOf('meeting link') >= 0 || text.toLowerCase().indexOf('join link') >= 0)) {
-                menuItems[i].click();
-                return JSON.stringify({ clicked: text, source: 'context_menu' });
+        // Search all links for Teams meeting URL
+        var links = document.querySelectorAll('a[href]');
+        for (var i = 0; i < links.length; i++) {
+            var href = links[i].href || '';
+            if (href.indexOf('teams.microsoft.com/l/meetup-join/') >= 0 ||
+                href.indexOf('teams.microsoft.com/meet/') >= 0) {
+                return JSON.stringify({ joinUrl: href, source: 'link_href' });
             }
         }
-        return JSON.stringify({ noMatch: true, items: allItems });
+
+        // Search page HTML for encoded Teams URLs
+        var html = document.body.innerHTML;
+        var match = html.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s\\]+/i);
+        if (match) return JSON.stringify({ joinUrl: match[0], source: 'html_regex' });
+
+        var meetMatch = html.match(/https:\/\/teams\.microsoft\.com\/meet\/[^""'<\s\\]+/i);
+        if (meetMatch) return JSON.stringify({ joinUrl: meetMatch[0], source: 'meet_regex' });
+
+        return JSON.stringify({ noUrl: true });
     } catch(e) { return JSON.stringify({ error: e.message }); }
 })();";
 
-                var copyResult = await _instance.EvaluateJsAsync(copyLinkJs);
-                Log.Information("CalendarCollectorTask: copy link result for [{Subject}]: {Result}",
-                    subject, copyResult);
+                var resultJson = await _instance.EvaluateJsAsync(searchJs);
+                Log.Information("CalendarCollectorTask: search result for [{Subject}]: {Result}",
+                    subject, resultJson ?? "null");
 
                 string? joinUrl = null;
 
-                if (copyResult != null)
+                if (resultJson != null)
                 {
-                    using var copyDoc = JsonDocument.Parse(copyResult);
-                    var copyRoot = copyDoc.RootElement;
-
-                    if (copyRoot.TryGetProperty("clicked", out _))
-                    {
-                        // "Copy meeting link" was clicked — URL is now in system clipboard
-                        await Task.Delay(1000);
-
-                        // Read from system clipboard via WPF (JS clipboard API is blocked in offscreen WebView)
-                        string? clipboardUrl = null;
-                        System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            try
-                            {
-                                if (System.Windows.Clipboard.ContainsText())
-                                    clipboardUrl = System.Windows.Clipboard.GetText();
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Debug(ex, "CalendarCollectorTask: clipboard read failed");
-                            }
-                        });
-
-                        Log.Information("CalendarCollectorTask: clipboard for [{Subject}]: {Url}", subject, clipboardUrl ?? "null");
-
-                        if (clipboardUrl != null && clipboardUrl.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase))
-                            joinUrl = clipboardUrl;
-                    }
+                    using var searchDoc = JsonDocument.Parse(resultJson);
+                    if (searchDoc.RootElement.TryGetProperty("joinUrl", out var ju))
+                        joinUrl = ju.GetString();
                 }
 
-                // Fallback: check network-captured URL
+                // Fallback: network-captured URL
                 joinUrl ??= capturedTeamsUrl;
 
-                // Fallback: search page HTML
-                if (joinUrl == null)
-                {
-                    var searchJs = @"
-(function() {
-    try {
-        var match = document.body.innerHTML.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s\\]+/i);
-        if (match) return match[0];
-        return null;
-    } catch(e) { return null; }
-})();";
-                    joinUrl = await _instance.EvaluateJsAsync(searchJs);
-                }
-
-                // Dismiss context menu
+                // Close the detail pane
                 await _instance.EvaluateJsAsync(
                     "(function() { document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', keyCode: 27, bubbles: true})); return 'ok'; })();");
 
