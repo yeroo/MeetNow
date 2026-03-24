@@ -143,15 +143,8 @@ namespace MeetNow
                     };
                 }
 
-                // Schedule CalendarCollectorTask every 15 min
-                WebViewManager.Instance.ScheduleTask("CalendarCollector",
-                    TimeSpan.FromMinutes(15),
-                    async _ =>
-                    {
-                        await WebViewManager.Instance.RequestTask("CalendarCollector",
-                            Tasks.CalendarCollectorTask.RunAsync,
-                            "https://outlook.cloud.microsoft/calendar/view/day");
-                    });
+                // CalendarCollectorTask is now a persistent listener on its own
+                // dedicated WebViewInstance — started automatically by WebViewManager
 
                 // Schedule PeopleEnricherTask every 30 min
                 WebViewManager.Instance.ScheduleTask("PeopleEnricher",

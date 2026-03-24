@@ -21,6 +21,7 @@ namespace MeetNow
 
         private CoreWebView2Environment? _environment;
         private WebViewInstance? _persistent;
+        private WebViewInstance? _calendarMonitor;
         private WebViewInstance? _transient;
         private readonly SemaphoreSlim _transientLock = new(1, 1);
         private readonly ConcurrentDictionary<string, DispatcherTimer> _scheduledTasks = new();
@@ -32,6 +33,7 @@ namespace MeetNow
 
         public bool IsInitialized => _initialized;
         public WebViewInstance? PersistentInstance => _persistent;
+        public WebViewInstance? CalendarInstance => _calendarMonitor;
         public WebViewInstance? TransientInstance => _transient;
 
         public IReadOnlyList<WebViewInstance> ActiveInstances
@@ -40,6 +42,7 @@ namespace MeetNow
             {
                 var list = new List<WebViewInstance>();
                 if (_persistent != null) list.Add(_persistent);
+                if (_calendarMonitor != null) list.Add(_calendarMonitor);
                 if (_transient != null) list.Add(_transient);
                 return list;
             }
@@ -63,6 +66,9 @@ namespace MeetNow
 
                 // Start persistent instance (MessageMonitor on Teams)
                 await StartPersistentAsync("https://teams.microsoft.com");
+
+                // Start calendar monitor instance (dedicated WebView for Outlook calendar)
+                await StartCalendarMonitorAsync();
 
                 // Start heartbeat timer (60s)
                 _heartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
@@ -101,6 +107,31 @@ namespace MeetNow
                 _persistent?.Dispose();
                 _persistent = null;
                 return null;
+            }
+        }
+
+        private async Task StartCalendarMonitorAsync()
+        {
+            if (_environment == null) return;
+
+            try
+            {
+                _calendarMonitor = new WebViewInstance("CalendarMonitor", InstanceType.Persistent);
+                await _calendarMonitor.InitializeAsync(_environment);
+
+                // Start CalendarCollectorTask as a persistent listener
+                Tasks.CalendarCollectorTask.StartListening(_calendarMonitor);
+
+                // Navigate to Outlook calendar — triggers API calls that CalendarCollectorTask intercepts
+                await _calendarMonitor.NavigateAndWaitAsync("https://outlook.cloud.microsoft/calendar/view/day");
+
+                Log.Information("WebViewManager: CalendarMonitor started");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "WebViewManager: failed to start CalendarMonitor");
+                _calendarMonitor?.Dispose();
+                _calendarMonitor = null;
             }
         }
 
@@ -241,22 +272,45 @@ namespace MeetNow
 
         private async Task HeartbeatCheckAsync()
         {
-            if (_persistent == null || _shuttingDown) return;
+            if (_shuttingDown) return;
 
-            try
+            if (_persistent != null)
             {
-                var alive = await _persistent.HeartbeatAsync();
-                if (!alive)
+                try
                 {
-                    Log.Warning("WebViewManager: persistent instance heartbeat failed, recreating");
-                    _persistent.Dispose();
-                    _persistent = null;
-                    await StartPersistentAsync("https://teams.microsoft.com");
+                    var alive = await _persistent.HeartbeatAsync();
+                    if (!alive)
+                    {
+                        Log.Warning("WebViewManager: MessageMonitor heartbeat failed, recreating");
+                        _persistent.Dispose();
+                        _persistent = null;
+                        await StartPersistentAsync("https://teams.microsoft.com");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "WebViewManager: MessageMonitor heartbeat check failed");
                 }
             }
-            catch (Exception ex)
+
+            if (_calendarMonitor != null)
             {
-                Log.Warning(ex, "WebViewManager: heartbeat check failed");
+                try
+                {
+                    var alive = await _calendarMonitor.HeartbeatAsync();
+                    if (!alive)
+                    {
+                        Log.Warning("WebViewManager: CalendarMonitor heartbeat failed, recreating");
+                        Tasks.CalendarCollectorTask.StopListening();
+                        _calendarMonitor.Dispose();
+                        _calendarMonitor = null;
+                        await StartCalendarMonitorAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "WebViewManager: CalendarMonitor heartbeat check failed");
+                }
             }
         }
 
@@ -273,6 +327,10 @@ namespace MeetNow
 
             _transient?.Dispose();
             _transient = null;
+
+            Tasks.CalendarCollectorTask.StopListening();
+            _calendarMonitor?.Dispose();
+            _calendarMonitor = null;
 
             _persistent?.Dispose();
             _persistent = null;

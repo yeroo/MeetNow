@@ -4,31 +4,144 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Windows.Threading;
 
 namespace MeetNow.Tasks
 {
     /// <summary>
-    /// Transient task — navigates to Outlook calendar, captures events via passive
-    /// interception of OWA API calls (service.svc, startupdata.ashx).
-    /// Results stored in LastCollectedMeetings for MeetingDataAggregator to consume.
+    /// Persistent listener on a dedicated CalendarMonitor WebViewInstance.
+    /// Passively intercepts OWA API responses to capture calendar events.
+    /// Refreshes by re-navigating to Outlook calendar every 15 min.
     /// </summary>
     public static class CalendarCollectorTask
     {
         private static readonly object _lock = new();
         private static TeamsMeeting[] _lastCollected = Array.Empty<TeamsMeeting>();
+        private static WebViewInstance? _instance;
+        private static DispatcherTimer? _refreshTimer;
+        private static readonly List<TeamsMeeting> _capturedMeetings = new();
 
         public static TeamsMeeting[] LastCollectedMeetings
         {
             get { lock (_lock) return _lastCollected; }
         }
 
+        /// <summary>
+        /// Attach to a dedicated WebViewInstance as a persistent listener.
+        /// Called once from WebViewManager.StartCalendarMonitorAsync().
+        /// </summary>
+        public static void StartListening(WebViewInstance instance)
+        {
+            _instance = instance;
+            _instance.ResponseReceived += OnResponseReceived;
+
+            // Flush captured meetings after initial page load (20s warmup)
+            _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
+            _refreshTimer.Tick += OnFirstFlush;
+            _refreshTimer.Start();
+
+            Log.Information("CalendarCollectorTask: listening on [{Name}]", instance.Name);
+        }
+
+        public static void StopListening()
+        {
+            _refreshTimer?.Stop();
+            _refreshTimer = null;
+
+            if (_instance != null)
+            {
+                _instance.ResponseReceived -= OnResponseReceived;
+                _instance = null;
+            }
+
+            Log.Information("CalendarCollectorTask: stopped listening");
+        }
+
+        private static void OnFirstFlush(object? sender, EventArgs e)
+        {
+            // First flush after warmup — store whatever we captured
+            FlushCaptured();
+
+            // Switch to 15-min refresh cycle
+            _refreshTimer!.Stop();
+            _refreshTimer.Interval = TimeSpan.FromMinutes(15);
+            _refreshTimer.Tick -= OnFirstFlush;
+            _refreshTimer.Tick += OnRefreshTick;
+            _refreshTimer.Start();
+
+            Log.Information("CalendarCollectorTask: initial flush done, switching to 15-min refresh");
+        }
+
+        private static async void OnRefreshTick(object? sender, EventArgs e)
+        {
+            if (_instance == null) return;
+
+            try
+            {
+                Log.Information("CalendarCollectorTask: refreshing calendar");
+
+                // Clear buffer for fresh capture
+                lock (_capturedMeetings)
+                    _capturedMeetings.Clear();
+
+                // Re-navigate to trigger fresh API calls
+                await _instance.NavigateAndWaitAsync("https://outlook.cloud.microsoft/calendar/view/day");
+
+                // Check for auth redirect
+                if (_instance.CurrentUrl != null &&
+                    _instance.CurrentUrl.Contains("login.microsoftonline.com", StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Warning("CalendarCollectorTask: auth redirect on refresh, skipping");
+                    return;
+                }
+
+                // Wait for API calls, then flush
+                await Task.Delay(15000);
+                FlushCaptured();
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "CalendarCollectorTask: refresh failed");
+            }
+        }
+
+        private static void FlushCaptured()
+        {
+            lock (_capturedMeetings)
+            {
+                if (_capturedMeetings.Count > 0)
+                {
+                    lock (_lock)
+                    {
+                        _lastCollected = _capturedMeetings.ToArray();
+                    }
+                    Log.Information("CalendarCollectorTask: flushed {Count} meetings", _capturedMeetings.Count);
+                }
+                else
+                {
+                    Log.Information("CalendarCollectorTask: no meetings captured this cycle");
+                }
+            }
+        }
+
+        private static void OnResponseReceived(string uri, string? body, IDictionary<string, string> headers)
+        {
+            if (body == null) return;
+
+            lock (_capturedMeetings)
+            {
+                TryParseCalendarEvents(uri, body, _capturedMeetings);
+            }
+        }
+
+        // ---- Kept: RunAsync for backward compat (transient one-shot) ----
+
         public static async Task RunAsync(WebViewInstance instance)
         {
-            Log.Information("CalendarCollectorTask: starting calendar collection");
+            Log.Information("CalendarCollectorTask: starting one-shot calendar collection");
 
             var capturedMeetings = new List<TeamsMeeting>();
 
-            // Subscribe to response events to capture calendar data
             void onResponse(string uri, string? body, IDictionary<string, string> headers)
             {
                 if (body == null) return;
@@ -39,10 +152,8 @@ namespace MeetNow.Tasks
 
             try
             {
-                // Navigate to Outlook calendar day view
                 await instance.NavigateAndWaitAsync("https://outlook.cloud.microsoft/calendar/view/day");
 
-                // Check for auth redirect
                 if (instance.CurrentUrl != null &&
                     instance.CurrentUrl.Contains("login.microsoftonline.com", StringComparison.OrdinalIgnoreCase))
                 {
@@ -50,7 +161,6 @@ namespace MeetNow.Tasks
                     return;
                 }
 
-                // Wait for OWA API calls to complete
                 await Task.Delay(15000);
 
                 Log.Information("CalendarCollectorTask: captured {Count} meetings from OWA",
@@ -73,6 +183,8 @@ namespace MeetNow.Tasks
                 instance.ResponseReceived -= onResponse;
             }
         }
+
+        // ---- Parsers (unchanged) ----
 
         private static void TryParseCalendarEvents(string uri, string body, List<TeamsMeeting> meetings)
         {
@@ -115,7 +227,6 @@ namespace MeetNow.Tasks
                 using var doc = JsonDocument.Parse(body);
                 var root = doc.RootElement;
 
-                // Navigate Body.ResponseMessages.Items[].CalendarView.Items[]
                 if (!root.TryGetProperty("Body", out var responseBody)) return;
                 if (!responseBody.TryGetProperty("ResponseMessages", out var responseMessages)) return;
                 if (!responseMessages.TryGetProperty("Items", out var items)) return;
@@ -146,7 +257,6 @@ namespace MeetNow.Tasks
                 using var doc = JsonDocument.Parse(body);
                 var root = doc.RootElement;
 
-                // startupdata may have calendar items embedded
                 if (root.TryGetProperty("calendarEvents", out var events))
                 {
                     foreach (var evt in events.EnumerateArray())
@@ -226,7 +336,6 @@ namespace MeetNow.Tasks
 
                 DateTime start = default, end = default;
 
-                // OWA uses Start/End as ISO strings or as objects
                 if (evt.TryGetProperty("Start", out var startProp))
                 {
                     if (startProp.ValueKind == JsonValueKind.String)
@@ -242,14 +351,11 @@ namespace MeetNow.Tasks
                         DateTime.TryParse(dt.GetString(), out end);
                 }
 
-                // Extract Teams join URL from various fields
                 string? joinUrl = null;
 
-                // OnlineMeetingJoinUrl
                 if (evt.TryGetProperty("OnlineMeetingJoinUrl", out var omju) && omju.ValueKind == JsonValueKind.String)
                     joinUrl = omju.GetString();
 
-                // Location might contain Teams URL
                 if (joinUrl == null && evt.TryGetProperty("Location", out var loc))
                 {
                     var locStr = loc.ValueKind == JsonValueKind.String ? loc.GetString()
@@ -257,9 +363,6 @@ namespace MeetNow.Tasks
                     if (locStr != null && locStr.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase))
                         joinUrl = locStr;
                 }
-
-                // FreeBusyType
-                var freeBusy = evt.TryGetProperty("FreeBusyType", out var fb) ? fb.GetString() : null;
 
                 var organizer = evt.TryGetProperty("Organizer", out var org)
                     && org.TryGetProperty("EmailAddress", out var ea)
