@@ -471,9 +471,12 @@ namespace MeetNow
 
                     Dictionary<DateTime, List<TeamsMeeting>> aggregatedEvents = new();
 
+                    var isWebViewSource = MeetNowSettings.Instance.OutlookSource == "WebView";
                     foreach (var meeting in meetings)
                     {
-                        if (!string.IsNullOrEmpty(meeting.TeamsUrl))
+                        // WebView source: show all meetings (Teams URL not available from DOM)
+                        // Other sources: require Teams URL
+                        if (isWebViewSource || !string.IsNullOrEmpty(meeting.TeamsUrl))
                         {
                             if (now < meeting.Start)
                             {

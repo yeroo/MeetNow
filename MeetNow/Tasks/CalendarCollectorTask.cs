@@ -276,13 +276,30 @@ namespace MeetNow.Tasks
                     }
                 }
 
+                // If no URL found but text mentions Teams Meeting, mark as Teams meeting
+                // so it still shows in the tray menu
+                if (teamsUrl == null && fullText.Contains("Teams Meeting", StringComparison.OrdinalIgnoreCase))
+                    teamsUrl = "teams-meeting"; // placeholder — indicates it's a Teams meeting
+
+                // Extract organizer from aria-label "By Name"
+                string? organizer = null;
+                var byIdx = ariaLabel.IndexOf(", By ", StringComparison.OrdinalIgnoreCase);
+                if (byIdx >= 0)
+                {
+                    var orgStart = byIdx + 5;
+                    var orgEnd = ariaLabel.IndexOf(',', orgStart);
+                    organizer = orgEnd >= 0 ? ariaLabel[orgStart..orgEnd].Trim() : ariaLabel[orgStart..].Trim();
+                }
+
                 return new TeamsMeeting
                 {
                     Subject = subject,
                     Start = start,
                     End = end,
                     TeamsUrl = teamsUrl ?? "",
-                    Location = location
+                    Location = location,
+                    Organizer = organizer,
+                    Recurrent = ariaLabel.Contains("Recurring", StringComparison.OrdinalIgnoreCase)
                 };
             }
             catch (Exception ex)
