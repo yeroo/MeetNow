@@ -555,15 +555,29 @@ namespace MeetNow
             }
         }
 
-        void MeetingItemClick(object sender, RoutedEventArgs e)
+        async void MeetingItemClick(object sender, RoutedEventArgs e)
         {
             if (sender is MenuItem menuItem && menuItem.Tag is TeamsMeeting meeting)
             {
                 Log.Information("Starting meeting: {Time} - {Subject} URL=[{Url}]", meeting.Start.ToString("HH:mm"), meeting.Subject, meeting.TeamsUrl);
-                if (!string.IsNullOrEmpty(meeting.TeamsUrl)
-                    && meeting.TeamsUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+
+                var url = meeting.TeamsUrl;
+
+                // Lazy enrichment: if URL is a placeholder, fetch the real one from Outlook DOM
+                if (url == "teams-meeting")
                 {
-                    OutlookHelper.StartTeamsMeeting(meeting.TeamsUrl);
+                    var resolved = await Tasks.CalendarCollectorTask.GetJoinUrlAsync(meeting.Subject);
+                    if (resolved != null)
+                    {
+                        meeting.TeamsUrl = resolved;
+                        url = resolved;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(url)
+                    && url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    OutlookHelper.StartTeamsMeeting(url);
                 }
             }
         }
