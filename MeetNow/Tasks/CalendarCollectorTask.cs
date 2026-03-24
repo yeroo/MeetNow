@@ -33,9 +33,15 @@ namespace MeetNow.Tasks
         /// Attach to a dedicated WebViewInstance as a persistent listener.
         /// Called once from WebViewManager.StartCalendarMonitorAsync().
         /// </summary>
+        // Join URLs captured from network traffic during page load
+        private static readonly List<string> _capturedJoinUrls = new();
+
         public static void StartListening(WebViewInstance instance)
         {
             _instance = instance;
+
+            // Listen to ALL network responses to capture join URLs passively
+            _instance.ResponseReceived += OnNetworkResponse;
 
             // Parse DOM after initial page load (20s warmup for page to render)
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
@@ -49,8 +55,53 @@ namespace MeetNow.Tasks
         {
             _refreshTimer?.Stop();
             _refreshTimer = null;
+            if (_instance != null)
+                _instance.ResponseReceived -= OnNetworkResponse;
             _instance = null;
             Log.Information("CalendarCollectorTask: stopped listening");
+        }
+
+        /// <summary>
+        /// Persistent network listener — scans ALL response bodies for Teams join URLs.
+        /// </summary>
+        private static void OnNetworkResponse(string uri, string? body, IDictionary<string, string> headers)
+        {
+            if (body == null) return;
+
+            // Search for Teams join URL patterns
+            var searchPatterns = new[] { "teams.microsoft.com/l/meetup-join/", "teams.microsoft.com/meet/" };
+            foreach (var pattern in searchPatterns)
+            {
+                var idx = body.IndexOf(pattern, StringComparison.OrdinalIgnoreCase);
+                while (idx >= 0)
+                {
+                    // Find the start of the URL (scan backwards for "https://")
+                    var urlStart = body.LastIndexOf("https://", idx, Math.Min(idx, 200), StringComparison.OrdinalIgnoreCase);
+                    if (urlStart >= 0)
+                    {
+                        var urlEnd = body.IndexOfAny(new[] { '"', '\\', ' ', '\n', '\r', '<', '>', '\'' }, urlStart);
+                        if (urlEnd < 0) urlEnd = Math.Min(urlStart + 500, body.Length);
+                        var url = body[urlStart..urlEnd];
+
+                        // URL-decode if needed
+                        if (url.Contains("%2F", StringComparison.OrdinalIgnoreCase))
+                            url = Uri.UnescapeDataString(url);
+
+                        lock (_capturedJoinUrls)
+                        {
+                            if (!_capturedJoinUrls.Contains(url))
+                            {
+                                _capturedJoinUrls.Add(url);
+                                Log.Information("CalendarCollectorTask: captured join URL from network [{Uri}]: {Url}",
+                                    uri.Length > 80 ? uri[..80] : uri, url);
+                            }
+                        }
+                    }
+
+                    // Continue searching for more URLs in this body
+                    idx = body.IndexOf(pattern, idx + pattern.Length, StringComparison.OrdinalIgnoreCase);
+                }
+            }
         }
 
         private static async void OnFirstParse(object? sender, EventArgs e)
@@ -214,6 +265,26 @@ namespace MeetNow.Tasks
 
                 Log.Information("CalendarCollectorTask: parsed {Count} meetings from DOM", meetings.Count);
 
+                // Try to assign captured join URLs to meetings with placeholder
+                lock (_capturedJoinUrls)
+                {
+                    if (_capturedJoinUrls.Count > 0)
+                    {
+                        Log.Information("CalendarCollectorTask: {Count} join URLs captured from network", _capturedJoinUrls.Count);
+                        foreach (var m in meetings)
+                        {
+                            if (m.TeamsUrl == "teams-meeting" && _capturedJoinUrls.Count > 0)
+                            {
+                                // For now assign first available URL to first Teams meeting
+                                // TODO: match by meeting ID if multiple meetings
+                                m.TeamsUrl = _capturedJoinUrls[0];
+                                Log.Information("CalendarCollectorTask: assigned network URL to [{Subject}]: {Url}",
+                                    m.Subject, m.TeamsUrl);
+                            }
+                        }
+                    }
+                }
+
                 foreach (var m in meetings)
                     Log.Information("  Meeting: {Subject} {Start}-{End} TeamsUrl={Url}",
                         m.Subject, m.Start.ToString("HH:mm"), m.End.ToString("HH:mm"), m.TeamsUrl);
@@ -242,6 +313,17 @@ namespace MeetNow.Tasks
             if (_instance == null) return null;
 
             Log.Information("CalendarCollectorTask: fetching join URL for [{Subject}]", subject);
+
+            // Check cached URLs from network interception first
+            lock (_capturedJoinUrls)
+            {
+                if (_capturedJoinUrls.Count > 0)
+                {
+                    var url = _capturedJoinUrls[0]; // TODO: match by subject
+                    Log.Information("CalendarCollectorTask: using cached network URL for [{Subject}]: {Url}", subject, url);
+                    return url;
+                }
+            }
 
             // Watch network for Teams URL while we click
             string? capturedTeamsUrl = null;
