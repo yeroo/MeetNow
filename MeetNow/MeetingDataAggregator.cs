@@ -7,13 +7,6 @@ namespace MeetNow
 {
     public class MeetingDataAggregator
     {
-        private readonly Func<TeamsWebViewDataExtractor?> _getExtractor;
-
-        public MeetingDataAggregator(Func<TeamsWebViewDataExtractor?>? getExtractor = null)
-        {
-            _getExtractor = getExtractor ?? (() => null);
-        }
-
         /// <summary>
         /// Get today's meetings from all sources, deduplicated and merged.
         /// </summary>
@@ -50,20 +43,16 @@ namespace MeetNow
                 }
             }
 
-            // Source 2: WebView2 data extractor (lazily resolved — may not be ready yet)
-            var extractor = _getExtractor();
-            if (extractor != null)
+            // Source 2: CalendarCollectorTask cached meetings (from WebViewManager)
+            try
             {
-                try
-                {
-                    var webViewMeetings = extractor.GetMeetings();
-                    Log.Debug("WebView2 extractor returned {Count} meetings", webViewMeetings.Count);
-                    allMeetings.AddRange(webViewMeetings);
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "WebView2 extractor failed");
-                }
+                var webViewMeetings = Tasks.CalendarCollectorTask.LastCollectedMeetings;
+                Log.Debug("CalendarCollectorTask returned {Count} cached meetings", webViewMeetings.Length);
+                allMeetings.AddRange(webViewMeetings);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "CalendarCollectorTask cache read failed");
             }
 
             // Deduplicate

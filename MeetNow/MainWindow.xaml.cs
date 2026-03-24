@@ -35,7 +35,7 @@ namespace MeetNow
         private Timer _timer = null!;
         private TeamsMessageMonitor? _teamsMonitor;
         private NotificationListenerMonitor? _notificationMonitor;
-        private TeamsWebViewWindow? _teamsWebViewWindow;
+        private DebugViewerWindow? _debugViewerWindow;
         private MeetingDataAggregator? _meetingAggregator;
         private FindPersonWindow? _findPersonWindow;
 
@@ -57,12 +57,9 @@ namespace MeetNow
             QueueOverlay.Initialize();
             if (MeetNowSettings.Instance.ShowTeamsWebView)
             {
-                _teamsWebViewWindow = new TeamsWebViewWindow();
-                _teamsWebViewWindow.Show();
-                _teamsWebViewWindow.InitializeWebView();
+                InitializeWebViewManager();
             }
-            _meetingAggregator = new MeetingDataAggregator(
-                () => _teamsWebViewWindow?.Extractor);
+            _meetingAggregator = new MeetingDataAggregator();
             SystemEvents.PowerModeChanged += OnPowerChange;
 #if DEBUG
             var contextMenu = tb.ContextMenu;
@@ -124,6 +121,53 @@ namespace MeetNow
             contextMenu.Items.Insert(8, separator);
 #endif
         }
+        private async void InitializeWebViewManager()
+        {
+            try
+            {
+                await WebViewManager.Instance.InitializeAsync();
+
+                // Start MessageMonitorTask on the persistent instance
+                var persistent = WebViewManager.Instance.PersistentInstance;
+                if (persistent != null)
+                {
+                    // Wait for Teams to load before injecting hooks
+                    persistent.CoreWebView2!.NavigationCompleted += async (s, e) =>
+                    {
+                        if (e.IsSuccess && persistent.CurrentUrl?.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase) == true)
+                        {
+                            await Tasks.MessageMonitorTask.StartAsync(persistent);
+                        }
+                    };
+                }
+
+                // Schedule CalendarCollectorTask every 15 min
+                WebViewManager.Instance.ScheduleTask("CalendarCollector",
+                    TimeSpan.FromMinutes(15),
+                    async _ =>
+                    {
+                        await WebViewManager.Instance.RequestTask("CalendarCollector",
+                            Tasks.CalendarCollectorTask.RunAsync,
+                            "https://outlook.cloud.microsoft/calendar/view/day");
+                    });
+
+                // Schedule PeopleEnricherTask every 30 min
+                WebViewManager.Instance.ScheduleTask("PeopleEnricher",
+                    TimeSpan.FromMinutes(30),
+                    async _ =>
+                    {
+                        await WebViewManager.Instance.RequestTask("PeopleEnricher",
+                            Tasks.PeopleEnricherTask.RunAsync);
+                    });
+
+                Log.Information("WebViewManager initialized with scheduled tasks");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to initialize WebViewManager");
+            }
+        }
+
         private void OnPowerChange(object sender, PowerModeChangedEventArgs e)
         {
             switch (e.Mode)
@@ -310,8 +354,9 @@ namespace MeetNow
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
+            Tasks.MessageMonitorTask.Stop();
+            WebViewManager.Instance.Shutdown();
             ContactDatabase.FlushAndDispose();
-            _teamsWebViewWindow?.DisposeWebView();
             _timer.Dispose();
             _notificationMonitor?.Dispose();
             _teamsMonitor?.Dispose();
@@ -345,27 +390,28 @@ namespace MeetNow
             Close();
         }
 
-        private void MenuItem_TeamsWebViewClick(object sender, RoutedEventArgs e)
+        private void MenuItem_DebugWebViewClick(object sender, RoutedEventArgs e)
         {
-            if (_teamsWebViewWindow == null)
+            if (_debugViewerWindow == null)
             {
-                _teamsWebViewWindow = new TeamsWebViewWindow();
-                _teamsWebViewWindow.InitializeWebView();
+                _debugViewerWindow = new DebugViewerWindow();
+            }
+            else
+            {
+                _debugViewerWindow.RefreshInstances();
             }
 
-            if (_teamsWebViewWindow.IsVisible)
-                _teamsWebViewWindow.Hide();
+            if (_debugViewerWindow.IsVisible)
+                _debugViewerWindow.Hide();
             else
-                _teamsWebViewWindow.Show();
+                _debugViewerWindow.Show();
         }
 
         private void MenuItem_FindPersonClick(object sender, RoutedEventArgs e)
         {
             if (_findPersonWindow == null)
             {
-                _findPersonWindow = new FindPersonWindow(
-                    () => _teamsWebViewWindow?.Extractor,
-                    () => _teamsWebViewWindow?.Enricher);
+                _findPersonWindow = new FindPersonWindow();
             }
 
             if (_findPersonWindow.IsVisible)

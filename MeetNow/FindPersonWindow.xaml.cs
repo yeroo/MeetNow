@@ -13,14 +13,10 @@ namespace MeetNow
     public partial class FindPersonWindow : Window
     {
         private DispatcherTimer? _debounceTimer;
-        private readonly Func<TeamsWebViewDataExtractor?> _getExtractor;
-        private readonly Func<ContactEnricher?> _getEnricher;
 
-        public FindPersonWindow(Func<TeamsWebViewDataExtractor?>? getExtractor = null, Func<ContactEnricher?>? getEnricher = null)
+        public FindPersonWindow()
         {
             InitializeComponent();
-            _getExtractor = getExtractor ?? (() => null);
-            _getEnricher = getEnricher ?? (() => null);
             SearchBox.Focus();
         }
 
@@ -52,15 +48,22 @@ namespace MeetNow
             var localResults = ContactDatabase.GetByName(query);
             ShowResults(localResults, query);
 
-            // Remote search if few local results
-            var extractor = _getExtractor();
-            if (localResults.Count < 5 && extractor != null)
+            // Remote search via WebViewManager if few local results
+            if (localResults.Count < 5 && WebViewManager.Instance.IsInitialized)
             {
                 StatusText.Text = $"Searching Teams directory for \"{query}\"...";
                 try
                 {
-                    var remoteResults = await SearchTeamsDirectoryAsync(query);
-                    if (remoteResults.Count > 0)
+                    List<Contact>? remoteResults = null;
+                    var searchQuery = query; // capture for lambda
+
+                    await WebViewManager.Instance.RequestTask("FindPerson",
+                        async instance =>
+                        {
+                            remoteResults = await Tasks.PeopleEnricherTask.SearchAsync(instance, searchQuery);
+                        });
+
+                    if (remoteResults != null && remoteResults.Count > 0)
                     {
                         // Merge with local, deduplicate
                         var allIds = new HashSet<string>(localResults.Select(c => c.TeamsUserId), StringComparer.OrdinalIgnoreCase);
@@ -70,7 +73,6 @@ namespace MeetNow
                             if (allIds.Add(r.TeamsUserId))
                             {
                                 ContactDatabase.Upsert(r);
-                                _getEnricher()?.Enqueue(r.TeamsUserId);
                                 merged.Add(r);
                             }
                         }
@@ -84,70 +86,6 @@ namespace MeetNow
             }
 
             StatusText.Text = $"{ResultsPanel.Children.Count} result(s)";
-        }
-
-        private async System.Threading.Tasks.Task<List<Contact>> SearchTeamsDirectoryAsync(string query)
-        {
-            var ext = _getExtractor();
-            if (ext == null) return new();
-
-            var js = @"
-(async function() {
-    try {
-        var resp = await fetch('/api/mt/part/emea-02/beta/users/searchV2?includeDLs=false&includeBots=false&enableGuest=true&source=newChat&skypeTeamsInfo=true', {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ queryText: '" + query.Replace("'", "\\'").Replace("\\", "\\\\") + @"' })
-        });
-        if (!resp.ok) return null;
-        var data = await resp.json();
-        var results = data.value || data.results || [];
-        return JSON.stringify(results.map(function(r) {
-            return {
-                userId: r.mri || ('8:orgid:' + r.objectId) || '',
-                displayName: r.displayName || '',
-                email: r.email || r.sipAddress || r.userPrincipalName || null,
-                jobTitle: r.jobTitle || null,
-                department: r.department || null
-            };
-        }).slice(0, 20));
-    } catch(e) { return null; }
-})();";
-
-            // ExecuteScriptAsync resolves JS Promises natively
-            var resultJson = await ext.EvaluateJsAsync(js);
-
-            if (resultJson == null) return new();
-
-            var contacts = new List<Contact>();
-            try
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(resultJson);
-                foreach (var item in doc.RootElement.EnumerateArray())
-                {
-                    var userId = item.TryGetProperty("userId", out var u) ? u.GetString() : null;
-                    var name = item.TryGetProperty("displayName", out var n) ? n.GetString() : null;
-                    if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(name)) continue;
-
-                    contacts.Add(new Contact
-                    {
-                        TeamsUserId = userId,
-                        DisplayName = name,
-                        Email = item.TryGetProperty("email", out var e) && e.ValueKind == System.Text.Json.JsonValueKind.String ? e.GetString() : null,
-                        JobTitle = item.TryGetProperty("jobTitle", out var j) && j.ValueKind == System.Text.Json.JsonValueKind.String ? j.GetString() : null,
-                        Department = item.TryGetProperty("department", out var d) && d.ValueKind == System.Text.Json.JsonValueKind.String ? d.GetString() : null,
-                        Source = ContactSource.Search,
-                        LastSeenTimestamp = DateTime.Now,
-                        EnrichmentStatus = EnrichmentStatus.Pending
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(ex, "Failed to parse search results");
-            }
-            return contacts;
         }
 
         private void ShowResults(List<Contact> contacts, string query)
