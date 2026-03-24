@@ -262,52 +262,65 @@ namespace MeetNow.Tasks
             try
             {
                 var safeSubject = subject.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\"", "\\\"");
+
+                // Step 1: Click the meeting (sync)
                 var clickJs = $@"
-(async function() {{
+(function() {{
     try {{
         var items = document.querySelectorAll('[role=""button""][aria-label]');
-        var clicked = false;
         for (var i = 0; i < items.length; i++) {{
             var label = items[i].getAttribute('aria-label') || '';
             if (label.indexOf('{safeSubject}') >= 0) {{
                 items[i].click();
-                clicked = true;
-                break;
+                return 'clicked';
             }}
         }}
-        if (!clicked) return JSON.stringify({{ error: 'element not found' }});
+        return 'not_found';
+    }} catch(e) {{ return 'error:' + e.message; }}
+}})();";
 
-        await new Promise(r => setTimeout(r, 3000));
+                var clickResult = await _instance.EvaluateJsAsync(clickJs);
+                Log.Information("CalendarCollectorTask: click result for [{Subject}]: {Result}", subject, clickResult);
 
+                if (clickResult != "clicked")
+                    return capturedTeamsUrl; // element not found
+
+                // Step 2: Wait for detail panel to load
+                await Task.Delay(3000);
+
+                // Step 3: Search for Teams URL in the page
+                var searchJs = @"
+(function() {
+    try {
         // Strategy 1: link with Teams URL
         var allLinks = document.querySelectorAll('a[href*=""teams.microsoft.com""]');
-        if (allLinks.length > 0) return JSON.stringify({{ joinUrl: allLinks[0].href }});
+        if (allLinks.length > 0) return JSON.stringify({ joinUrl: allLinks[0].href });
 
-        // Strategy 2: Join button with data-url or href
+        // Strategy 2: Join button
         var joinBtns = document.querySelectorAll('button[aria-label*=""Join""], a[aria-label*=""Join""]');
-        for (var j = 0; j < joinBtns.length; j++) {{
+        for (var j = 0; j < joinBtns.length; j++) {
             var href = joinBtns[j].href || joinBtns[j].getAttribute('data-url') || '';
             if (href.indexOf('teams.microsoft.com') >= 0)
-                return JSON.stringify({{ joinUrl: href }});
-        }}
+                return JSON.stringify({ joinUrl: href });
+        }
 
         // Strategy 3: search detail panel HTML
         var panel = document.querySelector('[role=""dialog""], [class*=""reading""]');
-        if (panel) {{
+        if (panel) {
             var match = panel.innerHTML.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s]+/i);
-            if (match) return JSON.stringify({{ joinUrl: match[0] }});
-        }}
+            if (match) return JSON.stringify({ joinUrl: match[0] });
+        }
 
         // Strategy 4: full page search
         var fullMatch = document.body.innerHTML.match(/https:\/\/teams\.microsoft\.com\/l\/meetup-join\/[^""'<\s]+/i);
-        if (fullMatch) return JSON.stringify({{ joinUrl: fullMatch[0] }});
+        if (fullMatch) return JSON.stringify({ joinUrl: fullMatch[0] });
 
-        return JSON.stringify({{ noUrl: true }});
-    }} catch(e) {{ return JSON.stringify({{ error: e.message }}); }}
-}})();";
+        return JSON.stringify({ noUrl: true });
+    } catch(e) { return JSON.stringify({ error: e.message }); }
+})();";
 
-                var resultJson = await _instance.EvaluateJsAsync(clickJs);
-                Log.Information("CalendarCollectorTask: join URL result for [{Subject}]: {Result}",
+                var resultJson = await _instance.EvaluateJsAsync(searchJs);
+                Log.Information("CalendarCollectorTask: search result for [{Subject}]: {Result}",
                     subject, resultJson ?? "null");
 
                 string? joinUrl = null;
