@@ -63,13 +63,29 @@ namespace MeetNow
 
             try
             {
+                // Step 0: Navigate to Teams home to ensure clean state
+                TeamsOperationQueue.CurrentStep = "Navigating to Teams";
+                await NavigateOnUiThread(instance, "https://teams.microsoft.com");
+                await Task.Delay(2000);
+
+                // Dismiss any dialogs with Escape
+                await EvalOnUiThread(instance, @"(function() {
+                    for (var i = 0; i < 3; i++) {
+                        document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', keyCode: 27, bubbles: true}));
+                    }
+                    return 'ok';
+                })();");
+                await Task.Delay(500);
+
                 // Step 1: Find the search input
                 TeamsOperationQueue.CurrentStep = "Finding search input";
                 var searchFound = await EvalOnUiThread(instance,@"(function() {
-                    var el = document.querySelector('input[aria-label*=""Search""]')
-                         || document.querySelector('input[placeholder*=""Search""]')
-                         || document.querySelector('input[id=""searchInput""]');
-                    if (el) { el.focus(); return 'found'; }
+                    var el = document.querySelector('#ms-searchux-input')
+                         || document.querySelector('input[id=""ms-searchux-input""]')
+                         || document.querySelector('input[type=""search""]')
+                         || document.querySelector('input[aria-label*=""Search""]')
+                         || document.querySelector('input[placeholder*=""Search""]');
+                    if (el) { el.focus(); el.click(); return 'found'; }
                     return 'not_found';
                 })();");
 
@@ -79,20 +95,20 @@ namespace MeetNow
                     TeamsOperationQueue.CurrentStep = "Clicking search button";
                     Log.Information("SetStatus: search input not found directly, trying search button");
 
-                    await EvalOnUiThread(instance,@"(function() {
-                        var btn = document.querySelector('button[aria-label*=""Search""]')
-                               || document.querySelector('[data-tid=""searchInputBox""]')
-                               || document.querySelector('#searchInputBox');
+                    // Click "Expand search box" button
+                    await EvalOnUiThread(instance, @"(function() {
+                        var btn = document.querySelector('button[aria-label*=""search"" i]')
+                               || document.querySelector('button[aria-label*=""Search""]');
                         if (btn) btn.click();
                     })();");
 
                     await Task.Delay(1000);
 
-                    searchFound = await EvalOnUiThread(instance,@"(function() {
-                        var el = document.querySelector('input[aria-label*=""Search""]')
-                             || document.querySelector('input[placeholder*=""Search""]')
-                             || document.querySelector('input[id=""searchInput""]');
-                        if (el) { el.focus(); return 'found'; }
+                    searchFound = await EvalOnUiThread(instance, @"(function() {
+                        var el = document.querySelector('#ms-searchux-input')
+                             || document.querySelector('input[type=""search""]')
+                             || document.querySelector('input[aria-label*=""Search""]');
+                        if (el) { el.focus(); el.click(); return 'found'; }
                         return 'not_found';
                     })();");
 
@@ -137,9 +153,9 @@ namespace MeetNow
                 TeamsOperationQueue.CurrentStep = $"Typing {command}";
                 var commandEscaped = command.Replace("'", "\\'");
                 await EvalOnUiThread(instance,$@"(function() {{
-                    var el = document.querySelector('input[aria-label*=""Search""]')
-                         || document.querySelector('input[placeholder*=""Search""]')
-                         || document.querySelector('input[id=""searchInput""]');
+                    var el = document.querySelector('#ms-searchux-input')
+                         || document.querySelector('input[type=""search""]')
+                         || document.querySelector('input[aria-label*=""Search""]');
                     if (!el) return;
                     var nativeSetter = Object.getOwnPropertyDescriptor(
                         window.HTMLInputElement.prototype, 'value').set;
@@ -148,9 +164,9 @@ namespace MeetNow
                     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
                 }})();");
 
-                // Step 3: Wait for autocomplete dropdown
+                // Step 3: Wait for autocomplete dropdown to appear
                 TeamsOperationQueue.CurrentStep = "Waiting for autocomplete";
-                await Task.Delay(1500);
+                await Task.Delay(2500);
 
                 // Step 4: Find and click the autocomplete suggestion
                 TeamsOperationQueue.CurrentStep = "Selecting command";
