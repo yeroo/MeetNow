@@ -123,18 +123,36 @@ namespace MeetNow
                 TeamsOperationQueue.CurrentStep = "Waiting for autocomplete";
                 await Task.Delay(1500);
 
-                // Step 4: Press Enter to execute the slash command
-                TeamsOperationQueue.CurrentStep = "Enter (execute)";
-                await EvalOnUiThread(instance,@"(function() {
+                // Step 4: Click the first autocomplete suggestion, or press Enter as fallback
+                TeamsOperationQueue.CurrentStep = "Selecting command";
+                var selectResult = await EvalOnUiThread(instance, @"(function() {
+                    // Try clicking first suggestion in autocomplete dropdown
+                    var suggestions = document.querySelectorAll('[role=""option""], [role=""listbox""] [role=""option""], [class*=""suggestion""] button, [class*=""Suggestion""] button, [data-tid*=""search-suggest""]');
+                    if (suggestions.length > 0) {
+                        suggestions[0].click();
+                        return 'clicked_suggestion';
+                    }
+
+                    // Try listbox items
+                    var listItems = document.querySelectorAll('[role=""listbox""] > *, [class*=""dropdown""] li, [class*=""Dropdown""] li');
+                    if (listItems.length > 0) {
+                        listItems[0].click();
+                        return 'clicked_listitem';
+                    }
+
+                    // Fallback: press Enter on the input
                     var el = document.querySelector('input[aria-label*=""Search""]')
                          || document.querySelector('input[placeholder*=""Search""]')
-                         || document.querySelector('input[id=""searchInput""]');
-                    if (!el) return;
-                    el.dispatchEvent(new KeyboardEvent('keydown', {
-                        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-                        bubbles: true, cancelable: true
-                    }));
+                         || document.activeElement;
+                    if (el) {
+                        el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true}));
+                        el.dispatchEvent(new KeyboardEvent('keypress', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true}));
+                        el.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true}));
+                        return 'enter_dispatched';
+                    }
+                    return 'nothing_found';
                 })();");
+                Log.Information("SetStatus: select result = {Result}", selectResult);
 
                 await Task.Delay(1000);
 
