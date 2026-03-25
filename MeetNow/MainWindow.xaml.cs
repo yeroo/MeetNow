@@ -114,8 +114,12 @@ namespace MeetNow
             // MenuItem: test typing simulation
             var test8MenuItem = new MenuItem();
             test8MenuItem.Header = "Test: Simulate Typing";
-            test8MenuItem.Click += (_, _) => TeamsOperationQueue.Enqueue("Simulate typing to Boris Kudriashov",
-                () => TeamsStatusManager.SimulateTypingAsync("Boris Kudriashov"));
+            test8MenuItem.Click += (_, _) =>
+            {
+                var target = MeetNowSettings.Instance.ForwardToEmail ?? "test";
+                TeamsOperationQueue.Enqueue($"Simulate typing to {target}",
+                    () => TeamsStatusManager.SimulateTypingAsync(target));
+            };
 
             contextMenu.Items.Insert(5, test6MenuItem);
             contextMenu.Items.Insert(6, test7MenuItem);

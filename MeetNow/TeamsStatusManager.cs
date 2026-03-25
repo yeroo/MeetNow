@@ -210,11 +210,20 @@ namespace MeetNow
         /// </summary>
         private static async Task<bool> OpenChatViaSearch(WebViewInstance instance, string senderName, string logPrefix)
         {
-            var searchName = ExtractSearchName(senderName);
+            string searchQuery;
 
-            // Try to get email for more precise search
-            var contacts = ContactDatabase.GetByName(searchName);
-            var searchQuery = contacts.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Email))?.Email ?? searchName;
+            // If input is already an email, use it directly
+            if (senderName.Contains('@'))
+            {
+                searchQuery = senderName;
+            }
+            else
+            {
+                var searchName = ExtractSearchName(senderName);
+                // Try to get email for more precise search
+                var contacts = ContactDatabase.GetByName(searchName);
+                searchQuery = contacts.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Email))?.Email ?? searchName;
+            }
 
             Log.Information("{Prefix}: searching for '{Query}'", logPrefix, searchQuery);
 
