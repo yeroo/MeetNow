@@ -149,19 +149,28 @@ namespace MeetNow
                     }
                 }
 
-                // Step 2: Type the slash command into the search input
+                // Step 2: Type the slash command char by char to trigger React handlers
                 TeamsOperationQueue.CurrentStep = $"Typing {command}";
-                var commandEscaped = command.Replace("'", "\\'");
-                await EvalOnUiThread(instance,$@"(function() {{
+                var commandEscaped = command.Replace("'", "\\'").Replace("\\", "\\\\");
+                await EvalOnUiThread(instance, $@"(function() {{
                     var el = document.querySelector('#ms-searchux-input')
                          || document.querySelector('input[type=""search""]')
                          || document.querySelector('input[aria-label*=""Search""]');
                     if (!el) return;
-                    var nativeSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLInputElement.prototype, 'value').set;
-                    nativeSetter.call(el, '{commandEscaped}');
-                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    el.focus();
+
+                    // Type each character using keydown + input event simulation
+                    var text = '{commandEscaped}';
+                    for (var i = 0; i < text.length; i++) {{
+                        var ch = text[i];
+                        el.dispatchEvent(new KeyboardEvent('keydown', {{key: ch, code: 'Key' + ch.toUpperCase(), bubbles: true}}));
+                        // Update value incrementally
+                        var nativeSetter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value').set;
+                        nativeSetter.call(el, text.substring(0, i + 1));
+                        el.dispatchEvent(new InputEvent('input', {{data: ch, inputType: 'insertText', bubbles: true}}));
+                        el.dispatchEvent(new KeyboardEvent('keyup', {{key: ch, code: 'Key' + ch.toUpperCase(), bubbles: true}}));
+                    }}
                 }})();");
 
                 // Step 3: Wait for autocomplete dropdown to appear
