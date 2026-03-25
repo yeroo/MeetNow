@@ -237,7 +237,7 @@ namespace MeetNow
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(
                 () => instance.SendShortcutAsync("n", alt: true, shift: true)).Task.Unwrap();
             Log.Information("{Prefix}: sent Alt+Shift+N", logPrefix);
-            await Task.Delay(2000);
+            await Task.Delay(3000); // Wait for new chat dialog to fully render
 
             // Type the recipient in the To field via CDP
             TeamsOperationQueue.CurrentStep = $"Typing recipient: {searchQuery}";
@@ -245,7 +245,7 @@ namespace MeetNow
             {
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(
                     () => instance.TypeCharAsync(ch)).Task.Unwrap();
-                await Task.Delay(80);
+                await Task.Delay(120); // 120ms between chars to avoid drops
             }
 
             // Wait for suggestions to appear
