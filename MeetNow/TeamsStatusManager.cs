@@ -205,13 +205,115 @@ namespace MeetNow
         }
 
         /// <summary>
+        /// Open a 1:1 chat by searching for the person in the search box, then clicking their result.
+        /// Uses email if available, falls back to name. Returns true if compose box is focused.
+        /// </summary>
+        private static async Task<bool> OpenChatViaSearch(WebViewInstance instance, string senderName, string logPrefix)
+        {
+            var searchName = ExtractSearchName(senderName);
+
+            // Try to get email for more precise search
+            var contacts = ContactDatabase.GetByName(searchName);
+            var searchQuery = contacts.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Email))?.Email ?? searchName;
+
+            Log.Information("{Prefix}: searching for '{Query}'", logPrefix, searchQuery);
+
+            // Navigate to Teams home first
+            TeamsOperationQueue.CurrentStep = "Navigating to Teams";
+            await NavigateOnUiThread(instance, "https://teams.microsoft.com");
+            await Task.Delay(2000);
+
+            // Focus search box
+            TeamsOperationQueue.CurrentStep = "Opening search";
+            await EvalOnUiThread(instance, @"(function() {
+                var el = document.querySelector('#ms-searchux-input')
+                     || document.querySelector('input[type=""search""]');
+                if (el) { el.focus(); el.click(); el.select(); }
+            })();");
+            await Task.Delay(500);
+
+            // Type the search query via CDP
+            TeamsOperationQueue.CurrentStep = $"Searching for {searchQuery}";
+            foreach (var ch in searchQuery)
+            {
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                await Task.Delay(50);
+            }
+
+            // Wait for search results
+            await Task.Delay(2000);
+
+            // Press Enter to search
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.SendEnterAsync()).Task.Unwrap();
+            await Task.Delay(2000);
+
+            // Click the first person result — look for People tab or result items
+            TeamsOperationQueue.CurrentStep = "Selecting person";
+            var clickResult = await EvalOnUiThread(instance, @"(function() {
+                // Try clicking People tab first
+                var tabs = document.querySelectorAll('[role=""tab""]');
+                for (var i = 0; i < tabs.length; i++) {
+                    if ((tabs[i].textContent || '').indexOf('People') >= 0) {
+                        tabs[i].click();
+                        return 'people_tab_clicked';
+                    }
+                }
+                return 'no_people_tab';
+            })();");
+
+            if (clickResult == "people_tab_clicked")
+                await Task.Delay(1500);
+
+            // Click the first search result
+            var resultClicked = await EvalOnUiThread(instance, @"(function() {
+                // Look for search result items
+                var results = document.querySelectorAll('[data-tid*=""search-result""], [class*=""searchResult""], [role=""listitem""] [role=""button""]');
+                if (results.length > 0) { results[0].click(); return 'clicked_result'; }
+                // Try any list item in the results area
+                var items = document.querySelectorAll('[role=""list""] [role=""listitem""]');
+                if (items.length > 0) { items[0].click(); return 'clicked_listitem'; }
+                return 'no_results';
+            })();");
+
+            Log.Information("{Prefix}: result click = {Result}", logPrefix, resultClicked);
+
+            if (resultClicked == "no_results")
+            {
+                Log.Warning("{Prefix}: no search results found for '{Query}'", logPrefix, searchQuery);
+                return false;
+            }
+
+            // Wait for chat to open
+            await Task.Delay(2000);
+
+            // Find and focus compose box
+            TeamsOperationQueue.CurrentStep = "Focusing compose box";
+            var composeFound = await EvalOnUiThread(instance, @"(function() {
+                var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
+                     || document.querySelector('[role=""textbox""][contenteditable=""true""]')
+                     || document.querySelector('div[contenteditable=""true""]');
+                if (el) { el.focus(); return 'found'; }
+                return 'not_found';
+            })();");
+
+            if (composeFound != "found")
+            {
+                Log.Warning("{Prefix}: compose box not found after search", logPrefix);
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Opens the 1:1 chat with the sender, types "Hi", waits (typing indicator shows),
         /// then clears the text. Does not send anything.
         /// </summary>
         public static async Task<bool> SimulateTypingAsync(string senderName)
         {
-            var searchName = ExtractSearchName(senderName);
-            Log.Information("SimulateTyping: start for '{Name}' (search: '{Search}')", senderName, searchName);
+            Log.Information("SimulateTyping: start for '{Name}'", senderName);
 
             var instance = WebViewManager.Instance.TeamsAutomationInstance;
             if (instance == null || !instance.IsReady)
@@ -220,69 +322,38 @@ namespace MeetNow
                 return false;
             }
 
-            var userId = ResolveTeamsUserId(searchName);
-            if (userId == null)
-            {
-                Log.Warning("SimulateTyping: could not resolve Teams user ID for '{Name}'", searchName);
-                return false;
-            }
-
             try
             {
-                // Navigate to the 1:1 chat via deep link
-                TeamsOperationQueue.CurrentStep = "Opening chat";
-                var chatUrl = $"https://teams.microsoft.com/l/chat/0/0?users={Uri.EscapeDataString(userId)}";
-                Log.Information("SimulateTyping: navigating to {Url}", chatUrl);
-                await NavigateOnUiThread(instance,chatUrl);
-                await Task.Delay(3000);
-
-                // Find the compose box
-                TeamsOperationQueue.CurrentStep = "Finding compose box";
-                var composeFound = await EvalOnUiThread(instance,@"(function() {
-                    var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
-                         || document.querySelector('[role=""textbox""][contenteditable=""true""]')
-                         || document.querySelector('div[contenteditable=""true""]');
-                    if (el) { el.focus(); return 'found'; }
-                    return 'not_found';
-                })();");
-
-                if (composeFound != "found")
+                if (!await OpenChatViaSearch(instance, senderName, "SimulateTyping"))
                 {
-                    Log.Warning("SimulateTyping: compose box not found");
-                    TeamsOperationQueue.CurrentStep = "Failed — compose box not found";
+                    TeamsOperationQueue.CurrentStep = "Failed — chat not opened";
                     await NavigateBackToTeams(instance);
                     return false;
                 }
 
-                // Type "Hi" — sender sees "is typing..."
+                // Type "Hi" via CDP — sender sees "is typing..."
                 TeamsOperationQueue.CurrentStep = "Typing indicator active";
-                await EvalOnUiThread(instance,@"(function() {
-                    var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
-                         || document.querySelector('[role=""textbox""][contenteditable=""true""]')
-                         || document.querySelector('div[contenteditable=""true""]');
-                    if (!el) return;
-                    el.textContent = 'Hi';
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                })();");
+                foreach (var ch in "Hi")
+                {
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                    await Task.Delay(80);
+                }
 
-                // Hold for configured duration so the typing indicator stays visible
+                // Hold for configured duration
                 var typingDuration = MeetNowSettings.Instance.SimulateTypingDurationSeconds * 1000;
                 Log.Information("SimulateTyping: holding for {Duration}s", typingDuration / 1000);
                 await Task.Delay(typingDuration);
 
-                // Clear the text without sending
+                // Select all + Delete to clear without sending
                 TeamsOperationQueue.CurrentStep = "Clearing text";
-                await EvalOnUiThread(instance,@"(function() {
+                await EvalOnUiThread(instance, @"(function() {
                     var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
                          || document.querySelector('[role=""textbox""][contenteditable=""true""]')
                          || document.querySelector('div[contenteditable=""true""]');
-                    if (!el) return;
-                    el.textContent = '';
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    if (el) { el.textContent = ''; el.dispatchEvent(new Event('input', {bubbles: true})); }
                 })();");
 
-                // Navigate back
-                TeamsOperationQueue.CurrentStep = "Navigating back";
                 await NavigateBackToTeams(instance);
 
                 TeamsOperationQueue.CurrentStep = "Done";
@@ -303,9 +374,7 @@ namespace MeetNow
         /// </summary>
         public static async Task<bool> SendMessageAsync(string senderName, string message)
         {
-            var searchName = ExtractSearchName(senderName);
-            Log.Information("SendMessage: start for '{Name}' (search: '{Search}'), message: '{Message}'",
-                senderName, searchName, message);
+            Log.Information("SendMessage: start for '{Name}', message: '{Message}'", senderName, message);
 
             var instance = WebViewManager.Instance.TeamsAutomationInstance;
             if (instance == null || !instance.IsReady)
@@ -314,71 +383,32 @@ namespace MeetNow
                 return false;
             }
 
-            var userId = ResolveTeamsUserId(searchName);
-            if (userId == null)
-            {
-                Log.Warning("SendMessage: could not resolve Teams user ID for '{Name}'", searchName);
-                return false;
-            }
-
             try
             {
-                // Navigate to the 1:1 chat via deep link
-                TeamsOperationQueue.CurrentStep = "Opening chat";
-                var chatUrl = $"https://teams.microsoft.com/l/chat/0/0?users={Uri.EscapeDataString(userId)}";
-                Log.Information("SendMessage: navigating to {Url}", chatUrl);
-                await NavigateOnUiThread(instance,chatUrl);
-                await Task.Delay(3000);
-
-                // Find the compose box
-                TeamsOperationQueue.CurrentStep = "Finding compose box";
-                var composeFound = await EvalOnUiThread(instance,@"(function() {
-                    var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
-                         || document.querySelector('[role=""textbox""][contenteditable=""true""]')
-                         || document.querySelector('div[contenteditable=""true""]');
-                    if (el) { el.focus(); return 'found'; }
-                    return 'not_found';
-                })();");
-
-                if (composeFound != "found")
+                if (!await OpenChatViaSearch(instance, senderName, "SendMessage"))
                 {
-                    Log.Warning("SendMessage: compose box not found");
-                    TeamsOperationQueue.CurrentStep = "Failed — compose box not found";
+                    TeamsOperationQueue.CurrentStep = "Failed — chat not opened";
                     await NavigateBackToTeams(instance);
                     return false;
                 }
 
-                // Type the message
+                // Type the message via CDP
                 TeamsOperationQueue.CurrentStep = "Typing message";
-                var escapedMessage = message.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\n", "\\n").Replace("\r", "");
-                await EvalOnUiThread(instance,$@"(function() {{
-                    var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
-                         || document.querySelector('[role=""textbox""][contenteditable=""true""]')
-                         || document.querySelector('div[contenteditable=""true""]');
-                    if (!el) return;
-                    el.textContent = '{escapedMessage}';
-                    el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                }})();");
+                foreach (var ch in message)
+                {
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                    await Task.Delay(30);
+                }
 
                 await Task.Delay(500);
 
-                // Press Enter to send
-                TeamsOperationQueue.CurrentStep = "Sending message";
-                await EvalOnUiThread(instance,@"(function() {
-                    var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
-                         || document.querySelector('[role=""textbox""][contenteditable=""true""]')
-                         || document.querySelector('div[contenteditable=""true""]');
-                    if (!el) return;
-                    el.dispatchEvent(new KeyboardEvent('keydown', {
-                        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-                        bubbles: true, cancelable: true
-                    }));
-                })();");
+                // Press Enter to send via CDP
+                TeamsOperationQueue.CurrentStep = "Sending";
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendEnterAsync()).Task.Unwrap();
 
                 await Task.Delay(1000);
-
-                // Navigate back
-                TeamsOperationQueue.CurrentStep = "Navigating back";
                 await NavigateBackToTeams(instance);
 
                 TeamsOperationQueue.CurrentStep = "Done";
