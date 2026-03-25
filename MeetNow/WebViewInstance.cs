@@ -109,6 +109,65 @@ namespace MeetNow
             }
         }
 
+        /// <summary>
+        /// Send a real keystroke via Chrome DevTools Protocol Input.dispatchKeyEvent.
+        /// This triggers native browser input handling, not just JS events.
+        /// </summary>
+        public async Task SendKeyAsync(string key, int windowsVirtualKeyCode = 0)
+        {
+            if (_webView?.CoreWebView2 == null) return;
+            try
+            {
+                var keyDown = $"{{\"type\":\"keyDown\",\"key\":\"{key}\",\"code\":\"Key{key.ToUpper()}\",\"windowsVirtualKeyCode\":{windowsVirtualKeyCode},\"nativeVirtualKeyCode\":{windowsVirtualKeyCode}}}";
+                var keyUp = $"{{\"type\":\"keyUp\",\"key\":\"{key}\",\"code\":\"Key{key.ToUpper()}\",\"windowsVirtualKeyCode\":{windowsVirtualKeyCode},\"nativeVirtualKeyCode\":{windowsVirtualKeyCode}}}";
+
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", keyDown);
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", keyUp);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "WebViewInstance [{Name}] SendKeyAsync failed for '{Key}'", Name, key);
+            }
+        }
+
+        /// <summary>
+        /// Type a character via CDP Input.dispatchKeyEvent with char event.
+        /// </summary>
+        public async Task TypeCharAsync(char c)
+        {
+            if (_webView?.CoreWebView2 == null) return;
+            try
+            {
+                var charJson = $"{{\"type\":\"char\",\"text\":\"{c}\"}}";
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", charJson);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "WebViewInstance [{Name}] TypeCharAsync failed for '{Char}'", Name, c);
+            }
+        }
+
+        /// <summary>
+        /// Send Enter key via CDP.
+        /// </summary>
+        public async Task SendEnterAsync()
+        {
+            if (_webView?.CoreWebView2 == null) return;
+            try
+            {
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent",
+                    "{\"type\":\"rawKeyDown\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13,\"nativeVirtualKeyCode\":13}");
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent",
+                    "{\"type\":\"char\",\"text\":\"\\r\"}");
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent",
+                    "{\"type\":\"keyUp\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13,\"nativeVirtualKeyCode\":13}");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "WebViewInstance [{Name}] SendEnterAsync failed", Name);
+            }
+        }
+
         public async Task<bool> HeartbeatAsync()
         {
             try

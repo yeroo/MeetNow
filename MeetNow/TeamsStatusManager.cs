@@ -149,104 +149,34 @@ namespace MeetNow
                     }
                 }
 
-                // Step 2: Clear any existing text first, then type char by char
+                // Step 2: Clear search and type command via CDP (real browser keystrokes)
                 TeamsOperationQueue.CurrentStep = $"Typing {command}";
+
+                // Focus the search input
                 await EvalOnUiThread(instance, @"(function() {
                     var el = document.querySelector('#ms-searchux-input')
                          || document.querySelector('input[type=""search""]');
-                    if (!el) return;
-                    var nativeSetter = Object.getOwnPropertyDescriptor(
-                        window.HTMLInputElement.prototype, 'value').set;
-                    nativeSetter.call(el, '');
-                    el.dispatchEvent(new InputEvent('input', {inputType: 'deleteContentBackward', bubbles: true}));
+                    if (el) { el.focus(); el.select(); }
                 })();");
-                await Task.Delay(200);
+                await Task.Delay(300);
 
+                // Type each character via CDP Input.dispatchKeyEvent (real browser-level input)
                 foreach (var ch in command)
                 {
-                    var c = ch.ToString().Replace("'", "\\'");
-                    await EvalOnUiThread(instance, $@"(function() {{
-                        var el = document.querySelector('#ms-searchux-input')
-                             || document.querySelector('input[type=""search""]');
-                        if (!el) return;
-                        el.focus();
-                        el.dispatchEvent(new KeyboardEvent('keydown', {{key: '{c}', bubbles: true, cancelable: true}}));
-                        var nativeSetter = Object.getOwnPropertyDescriptor(
-                            window.HTMLInputElement.prototype, 'value').set;
-                        nativeSetter.call(el, el.value + '{c}');
-                        el.dispatchEvent(new InputEvent('input', {{data: '{c}', inputType: 'insertText', bubbles: true, composed: true}}));
-                        el.dispatchEvent(new KeyboardEvent('keyup', {{key: '{c}', bubbles: true}}));
-                    }})();");
-                    await Task.Delay(100); // 100ms between keystrokes
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                    await Task.Delay(80);
                 }
 
-                // Step 3: Wait for autocomplete dropdown to appear
+                // Step 3: Wait for autocomplete
                 TeamsOperationQueue.CurrentStep = "Waiting for autocomplete";
                 await Task.Delay(2000);
 
-                // Step 4: Find and click the autocomplete suggestion
-                TeamsOperationQueue.CurrentStep = "Selecting command";
-
-                // First dump what's in the dropdown so we can see the DOM
-                var dumpResult = await EvalOnUiThread(instance, @"(function() {
-                    var all = document.querySelectorAll('[role=""option""], [role=""listbox""] *, [class*=""suggest""], [class*=""Suggest""], [class*=""command""], [class*=""Command""], [class*=""slash""], [data-tid*=""suggest""], [data-tid*=""command""]');
-                    var found = [];
-                    for (var i = 0; i < all.length && i < 15; i++) {
-                        found.push({
-                            tag: all[i].tagName,
-                            role: all[i].getAttribute('role') || '',
-                            ariaLabel: (all[i].getAttribute('aria-label') || '').substring(0, 80),
-                            text: (all[i].textContent || '').trim().substring(0, 80),
-                            dataTid: all[i].getAttribute('data-tid') || '',
-                            className: (all[i].className || '').substring(0, 80),
-                            id: all[i].id || ''
-                        });
-                    }
-                    // Also check for any clickable items near the search
-                    var clickables = document.querySelectorAll('ul li, [role=""menu""] *, [role=""menuitem""], [class*=""result""] *, [class*=""list""] [class*=""item""]');
-                    var extras = [];
-                    for (var j = 0; j < clickables.length && j < 10; j++) {
-                        var text = (clickables[j].textContent || '').trim();
-                        if (text.indexOf('/') >= 0 || text.toLowerCase().indexOf('busy') >= 0 || text.toLowerCase().indexOf('available') >= 0 || text.toLowerCase().indexOf('status') >= 0) {
-                            extras.push({ tag: clickables[j].tagName, text: text.substring(0, 80), role: clickables[j].getAttribute('role') || '' });
-                        }
-                    }
-                    return JSON.stringify({ options: found, slashItems: extras });
-                })();");
-                Log.Information("SetStatus: autocomplete DOM dump: {Dump}", dumpResult);
-
-                var selectResult = await EvalOnUiThread(instance, @"(function() {
-                    // Strategy 1: role=""option"" items
-                    var options = document.querySelectorAll('[role=""option""]');
-                    if (options.length > 0) { options[0].click(); return 'clicked_option:' + (options[0].textContent || '').trim().substring(0, 40); }
-
-                    // Strategy 2: role=""listbox"" children
-                    var listbox = document.querySelector('[role=""listbox""]');
-                    if (listbox && listbox.children.length > 0) { listbox.children[0].click(); return 'clicked_listbox_child'; }
-
-                    // Strategy 3: any element containing the slash command text
-                    var all = document.querySelectorAll('*');
-                    for (var i = 0; i < all.length; i++) {
-                        var t = (all[i].textContent || '').trim();
-                        var c = all[i].children.length;
-                        // Leaf or near-leaf element with slash command text
-                        if (c < 3 && (t === '/busy' || t === '/available' || t === '/away' || t === '/dnd' || t === '/brb'
-                            || t === 'Set status to Busy' || t === 'Set status to Available'
-                            || t.indexOf('Set your status') >= 0)) {
-                            all[i].click();
-                            return 'clicked_text_match:' + t.substring(0, 40);
-                        }
-                    }
-
-                    // Strategy 4: press Enter
-                    var el = document.activeElement || document.querySelector('input[aria-label*=""Search""]');
-                    if (el) {
-                        el.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true}));
-                        return 'enter_dispatched';
-                    }
-                    return 'nothing_found';
-                })();");
-                Log.Information("SetStatus: select result = {Result}", selectResult);
+                // Step 4: Press Enter via CDP (real browser-level Enter key)
+                TeamsOperationQueue.CurrentStep = "Enter (execute)";
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendEnterAsync()).Task.Unwrap();
+                Log.Information("SetStatus: Enter sent via CDP");
 
                 await Task.Delay(1000);
 
