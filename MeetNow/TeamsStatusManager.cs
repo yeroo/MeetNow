@@ -232,57 +232,138 @@ namespace MeetNow
             await NavigateOnUiThread(instance, "https://teams.microsoft.com");
             await Task.Delay(2000);
 
-            // Focus search box
-            TeamsOperationQueue.CurrentStep = "Opening search";
-            await EvalOnUiThread(instance, @"(function() {
-                var el = document.querySelector('#ms-searchux-input')
-                     || document.querySelector('input[type=""search""]');
-                if (el) { el.focus(); el.click(); el.select(); }
+            // Try "New message" button first (more reliable than search for opening chat)
+            TeamsOperationQueue.CurrentStep = "Opening new chat";
+            var newChatResult = await EvalOnUiThread(instance, @"(function() {
+                // Click 'New message' or 'New chat' button
+                var btn = document.querySelector('button[aria-label*=""New message""]')
+                       || document.querySelector('button[aria-label*=""New chat""]')
+                       || document.querySelector('button[aria-label*=""new message"" i]');
+                if (btn) { btn.click(); return 'clicked'; }
+                return 'not_found';
             })();");
-            await Task.Delay(500);
+            Log.Information("{Prefix}: new chat button = {Result}", logPrefix, newChatResult);
 
-            // Type the search query via CDP
-            TeamsOperationQueue.CurrentStep = $"Searching for {searchQuery}";
-            foreach (var ch in searchQuery)
+            if (newChatResult == "clicked")
             {
+                await Task.Delay(1500);
+
+                // Find the "To" field and type the search query
+                TeamsOperationQueue.CurrentStep = $"Typing recipient: {searchQuery}";
+
+                // Focus the To field
+                await EvalOnUiThread(instance, @"(function() {
+                    var toField = document.querySelector('input[aria-label*=""To""]')
+                              || document.querySelector('input[placeholder*=""name"" i]')
+                              || document.querySelector('input[placeholder*=""email"" i]')
+                              || document.querySelector('[data-tid*=""new-chat""] input');
+                    if (toField) { toField.focus(); toField.click(); }
+                })();");
+                await Task.Delay(500);
+
+                // Type via CDP
+                foreach (var ch in searchQuery)
+                {
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                    await Task.Delay(50);
+                }
+
+                // Wait for suggestions
+                await Task.Delay(2000);
+
+                // Press Enter to select first suggestion
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                    () => instance.TypeCharAsync(ch)).Task.Unwrap();
-                await Task.Delay(50);
+                    () => instance.SendEnterAsync()).Task.Unwrap();
+                await Task.Delay(1000);
+
+                // Tab to move to compose box
+                TeamsOperationQueue.CurrentStep = "Moving to compose box";
+                await EvalOnUiThread(instance, @"(function() {
+                    // Press Tab to move focus from To field to compose box
+                    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', keyCode: 9, bubbles: true}));
+                })();");
+                await Task.Delay(500);
+            }
+            else
+            {
+                // Fallback: use search box approach
+                TeamsOperationQueue.CurrentStep = "Opening search";
+                await EvalOnUiThread(instance, @"(function() {
+                    var el = document.querySelector('#ms-searchux-input')
+                         || document.querySelector('input[type=""search""]');
+                    if (el) { el.focus(); el.click(); el.select(); }
+                })();");
+                await Task.Delay(500);
+
+                TeamsOperationQueue.CurrentStep = $"Searching for {searchQuery}";
+                foreach (var ch in searchQuery)
+                {
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                    await Task.Delay(50);
+                }
+
+                await Task.Delay(2000);
+
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendEnterAsync()).Task.Unwrap();
+                await Task.Delay(2000);
+
+                // Click People tab
+                TeamsOperationQueue.CurrentStep = "Selecting person";
+                var clickResult = await EvalOnUiThread(instance, @"(function() {
+                    var tabs = document.querySelectorAll('[role=""tab""]');
+                    for (var i = 0; i < tabs.length; i++) {
+                        if ((tabs[i].textContent || '').indexOf('People') >= 0) {
+                            tabs[i].click();
+                            return 'people_tab_clicked';
+                        }
+                    }
+                    return 'no_people_tab';
+                })();");
+
+                if (clickResult == "people_tab_clicked")
+                    await Task.Delay(1500);
             }
 
-            // Wait for search results
-            await Task.Delay(2000);
-
-            // Press Enter to search
-            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                () => instance.SendEnterAsync()).Task.Unwrap();
-            await Task.Delay(2000);
-
-            // Click the first person result — look for People tab or result items
-            TeamsOperationQueue.CurrentStep = "Selecting person";
-            var clickResult = await EvalOnUiThread(instance, @"(function() {
-                // Try clicking People tab first
-                var tabs = document.querySelectorAll('[role=""tab""]');
-                for (var i = 0; i < tabs.length; i++) {
-                    if ((tabs[i].textContent || '').indexOf('People') >= 0) {
-                        tabs[i].click();
-                        return 'people_tab_clicked';
-                    }
+            // Dump search results DOM for debugging
+            var resultsDump = await EvalOnUiThread(instance, @"(function() {
+                var items = [];
+                // Broad search: anything that looks like a clickable result
+                var candidates = document.querySelectorAll('[role=""listitem""], [role=""option""], [data-tid*=""result""], [data-tid*=""person""], [class*=""result""], [class*=""Result""], [class*=""person""], [class*=""Person""]');
+                for (var i = 0; i < candidates.length && i < 10; i++) {
+                    items.push({
+                        tag: candidates[i].tagName,
+                        role: candidates[i].getAttribute('role') || '',
+                        ariaLabel: (candidates[i].getAttribute('aria-label') || '').substring(0, 80),
+                        text: (candidates[i].textContent || '').trim().substring(0, 80),
+                        dataTid: candidates[i].getAttribute('data-tid') || '',
+                        className: (candidates[i].className || '').substring(0, 60)
+                    });
                 }
-                return 'no_people_tab';
+                return JSON.stringify({ count: candidates.length, items: items });
             })();");
-
-            if (clickResult == "people_tab_clicked")
-                await Task.Delay(1500);
+            Log.Information("{Prefix}: search results DOM: {Dump}", logPrefix, resultsDump);
 
             // Click the first search result
             var resultClicked = await EvalOnUiThread(instance, @"(function() {
-                // Look for search result items
-                var results = document.querySelectorAll('[data-tid*=""search-result""], [class*=""searchResult""], [role=""listitem""] [role=""button""]');
-                if (results.length > 0) { results[0].click(); return 'clicked_result'; }
-                // Try any list item in the results area
-                var items = document.querySelectorAll('[role=""list""] [role=""listitem""]');
+                // Strategy 1: data-tid with result/person
+                var results = document.querySelectorAll('[data-tid*=""search-result""], [data-tid*=""person""]');
+                if (results.length > 0) { results[0].click(); return 'clicked_tid:' + results[0].getAttribute('data-tid'); }
+
+                // Strategy 2: role=listitem
+                var items = document.querySelectorAll('[role=""listitem""]');
                 if (items.length > 0) { items[0].click(); return 'clicked_listitem'; }
+
+                // Strategy 3: role=option
+                var options = document.querySelectorAll('[role=""option""]');
+                if (options.length > 0) { options[0].click(); return 'clicked_option'; }
+
+                // Strategy 4: any clickable with person-like class
+                var persons = document.querySelectorAll('[class*=""person"" i], [class*=""contact"" i], [class*=""result"" i]');
+                if (persons.length > 0) { persons[0].click(); return 'clicked_class'; }
+
                 return 'no_results';
             })();");
 
