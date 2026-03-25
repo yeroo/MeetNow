@@ -149,33 +149,40 @@ namespace MeetNow
                     }
                 }
 
-                // Step 2: Type the slash command char by char to trigger React handlers
+                // Step 2: Clear any existing text first, then type char by char
                 TeamsOperationQueue.CurrentStep = $"Typing {command}";
-                var commandEscaped = command.Replace("'", "\\'").Replace("\\", "\\\\");
-                await EvalOnUiThread(instance, $@"(function() {{
+                await EvalOnUiThread(instance, @"(function() {
                     var el = document.querySelector('#ms-searchux-input')
-                         || document.querySelector('input[type=""search""]')
-                         || document.querySelector('input[aria-label*=""Search""]');
+                         || document.querySelector('input[type=""search""]');
                     if (!el) return;
-                    el.focus();
+                    var nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value').set;
+                    nativeSetter.call(el, '');
+                    el.dispatchEvent(new InputEvent('input', {inputType: 'deleteContentBackward', bubbles: true}));
+                })();");
+                await Task.Delay(200);
 
-                    // Type each character using keydown + input event simulation
-                    var text = '{commandEscaped}';
-                    for (var i = 0; i < text.length; i++) {{
-                        var ch = text[i];
-                        el.dispatchEvent(new KeyboardEvent('keydown', {{key: ch, code: 'Key' + ch.toUpperCase(), bubbles: true}}));
-                        // Update value incrementally
+                foreach (var ch in command)
+                {
+                    var c = ch.ToString().Replace("'", "\\'");
+                    await EvalOnUiThread(instance, $@"(function() {{
+                        var el = document.querySelector('#ms-searchux-input')
+                             || document.querySelector('input[type=""search""]');
+                        if (!el) return;
+                        el.focus();
+                        el.dispatchEvent(new KeyboardEvent('keydown', {{key: '{c}', bubbles: true, cancelable: true}}));
                         var nativeSetter = Object.getOwnPropertyDescriptor(
                             window.HTMLInputElement.prototype, 'value').set;
-                        nativeSetter.call(el, text.substring(0, i + 1));
-                        el.dispatchEvent(new InputEvent('input', {{data: ch, inputType: 'insertText', bubbles: true}}));
-                        el.dispatchEvent(new KeyboardEvent('keyup', {{key: ch, code: 'Key' + ch.toUpperCase(), bubbles: true}}));
-                    }}
-                }})();");
+                        nativeSetter.call(el, el.value + '{c}');
+                        el.dispatchEvent(new InputEvent('input', {{data: '{c}', inputType: 'insertText', bubbles: true, composed: true}}));
+                        el.dispatchEvent(new KeyboardEvent('keyup', {{key: '{c}', bubbles: true}}));
+                    }})();");
+                    await Task.Delay(100); // 100ms between keystrokes
+                }
 
                 // Step 3: Wait for autocomplete dropdown to appear
                 TeamsOperationQueue.CurrentStep = "Waiting for autocomplete";
-                await Task.Delay(2500);
+                await Task.Delay(2000);
 
                 // Step 4: Find and click the autocomplete suggestion
                 TeamsOperationQueue.CurrentStep = "Selecting command";
