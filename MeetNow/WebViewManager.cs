@@ -22,6 +22,7 @@ namespace MeetNow
         private CoreWebView2Environment? _environment;
         private WebViewInstance? _persistent;
         private WebViewInstance? _calendarMonitor;
+        private WebViewInstance? _teamsAutomation;
         private WebViewInstance? _transient;
         private readonly SemaphoreSlim _transientLock = new(1, 1);
         private readonly ConcurrentDictionary<string, DispatcherTimer> _scheduledTasks = new();
@@ -34,6 +35,7 @@ namespace MeetNow
         public bool IsInitialized => _initialized;
         public WebViewInstance? PersistentInstance => _persistent;
         public WebViewInstance? CalendarInstance => _calendarMonitor;
+        public WebViewInstance? TeamsAutomationInstance => _teamsAutomation;
         public WebViewInstance? TransientInstance => _transient;
 
         public IReadOnlyList<WebViewInstance> ActiveInstances
@@ -43,6 +45,7 @@ namespace MeetNow
                 var list = new List<WebViewInstance>();
                 if (_persistent != null) list.Add(_persistent);
                 if (_calendarMonitor != null) list.Add(_calendarMonitor);
+                if (_teamsAutomation != null) list.Add(_teamsAutomation);
                 if (_transient != null) list.Add(_transient);
                 return list;
             }
@@ -69,6 +72,9 @@ namespace MeetNow
 
                 // Start calendar monitor instance (dedicated WebView for Outlook calendar)
                 await StartCalendarMonitorAsync();
+
+                // Start Teams automation instance (for status changes, typing, messaging)
+                await StartTeamsAutomationAsync();
 
                 // Start heartbeat timer (60s)
                 _heartbeatTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
@@ -132,6 +138,35 @@ namespace MeetNow
                 Log.Error(ex, "WebViewManager: failed to start CalendarMonitor");
                 _calendarMonitor?.Dispose();
                 _calendarMonitor = null;
+            }
+        }
+
+        private async Task StartTeamsAutomationAsync()
+        {
+            if (_environment == null) return;
+            try
+            {
+                _teamsAutomation = new WebViewInstance("TeamsAutomation", InstanceType.Persistent);
+                await _teamsAutomation.InitializeAsync(_environment);
+                await _teamsAutomation.NavigateAndWaitAsync("https://teams.microsoft.com");
+
+                // Run shortcut discovery after Teams loads
+                _teamsAutomation.CoreWebView2!.NavigationCompleted += async (s, e) =>
+                {
+                    if (e.IsSuccess && _teamsAutomation.CurrentUrl?.Contains("teams.microsoft.com") == true)
+                    {
+                        await Task.Delay(5000);
+                        await Tasks.TeamsShortcutDiscovery.DiscoverAsync(_teamsAutomation);
+                    }
+                };
+
+                Log.Information("WebViewManager: TeamsAutomation started");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "WebViewManager: failed to start TeamsAutomation");
+                _teamsAutomation?.Dispose();
+                _teamsAutomation = null;
             }
         }
 
@@ -312,6 +347,25 @@ namespace MeetNow
                     Log.Warning(ex, "WebViewManager: CalendarMonitor heartbeat check failed");
                 }
             }
+
+            if (_teamsAutomation != null)
+            {
+                try
+                {
+                    var alive = await _teamsAutomation.HeartbeatAsync();
+                    if (!alive)
+                    {
+                        Log.Warning("WebViewManager: TeamsAutomation heartbeat failed, recreating");
+                        _teamsAutomation.Dispose();
+                        _teamsAutomation = null;
+                        await StartTeamsAutomationAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "WebViewManager: TeamsAutomation heartbeat check failed");
+                }
+            }
         }
 
         public void Shutdown()
@@ -331,6 +385,9 @@ namespace MeetNow
             Tasks.CalendarCollectorTask.StopListening();
             _calendarMonitor?.Dispose();
             _calendarMonitor = null;
+
+            _teamsAutomation?.Dispose();
+            _teamsAutomation = null;
 
             _persistent?.Dispose();
             _persistent = null;
