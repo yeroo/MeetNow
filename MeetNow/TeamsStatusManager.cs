@@ -22,6 +22,22 @@ namespace MeetNow
         }
 
         /// <summary>
+        /// Run a JS script on the WebView via the UI thread dispatcher.
+        /// WebView2 WPF controls must be accessed from the thread that created them.
+        /// </summary>
+        private static async Task<string?> EvalOnUiThread(WebViewInstance instance, string script)
+        {
+            return await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.EvaluateJsAsync(script)).Task.Unwrap();
+        }
+
+        private static async Task NavigateOnUiThread(WebViewInstance instance, string url)
+        {
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.NavigateAndWaitAsync(url)).Task.Unwrap();
+        }
+
+        /// <summary>
         /// Set Teams status using slash commands typed into the search bar via DOM automation.
         /// </summary>
         public static async Task<bool> SetStatusAsync(TeamsStatus status)
@@ -49,7 +65,7 @@ namespace MeetNow
             {
                 // Step 1: Find the search input
                 TeamsOperationQueue.CurrentStep = "Finding search input";
-                var searchFound = await instance.EvaluateJsAsync(@"(function() {
+                var searchFound = await EvalOnUiThread(instance,@"(function() {
                     var el = document.querySelector('input[aria-label*=""Search""]')
                          || document.querySelector('input[placeholder*=""Search""]')
                          || document.querySelector('input[id=""searchInput""]');
@@ -63,7 +79,7 @@ namespace MeetNow
                     TeamsOperationQueue.CurrentStep = "Clicking search button";
                     Log.Information("SetStatus: search input not found directly, trying search button");
 
-                    await instance.EvaluateJsAsync(@"(function() {
+                    await EvalOnUiThread(instance,@"(function() {
                         var btn = document.querySelector('button[aria-label*=""Search""]')
                                || document.querySelector('[data-tid=""searchInputBox""]')
                                || document.querySelector('#searchInputBox');
@@ -72,7 +88,7 @@ namespace MeetNow
 
                     await Task.Delay(1000);
 
-                    searchFound = await instance.EvaluateJsAsync(@"(function() {
+                    searchFound = await EvalOnUiThread(instance,@"(function() {
                         var el = document.querySelector('input[aria-label*=""Search""]')
                              || document.querySelector('input[placeholder*=""Search""]')
                              || document.querySelector('input[id=""searchInput""]');
@@ -91,7 +107,7 @@ namespace MeetNow
                 // Step 2: Type the slash command into the search input
                 TeamsOperationQueue.CurrentStep = $"Typing {command}";
                 var commandEscaped = command.Replace("'", "\\'");
-                await instance.EvaluateJsAsync($@"(function() {{
+                await EvalOnUiThread(instance,$@"(function() {{
                     var el = document.querySelector('input[aria-label*=""Search""]')
                          || document.querySelector('input[placeholder*=""Search""]')
                          || document.querySelector('input[id=""searchInput""]');
@@ -109,7 +125,7 @@ namespace MeetNow
 
                 // Step 4: Press Enter to execute the slash command
                 TeamsOperationQueue.CurrentStep = "Enter (execute)";
-                await instance.EvaluateJsAsync(@"(function() {
+                await EvalOnUiThread(instance,@"(function() {
                     var el = document.querySelector('input[aria-label*=""Search""]')
                          || document.querySelector('input[placeholder*=""Search""]')
                          || document.querySelector('input[id=""searchInput""]');
@@ -124,7 +140,7 @@ namespace MeetNow
 
                 // Step 5: Dismiss with Escape
                 TeamsOperationQueue.CurrentStep = "Esc (cleanup)";
-                await instance.EvaluateJsAsync(@"(function() {
+                await EvalOnUiThread(instance,@"(function() {
                     var el = document.activeElement || document.body;
                     el.dispatchEvent(new KeyboardEvent('keydown', {
                         key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
@@ -175,12 +191,12 @@ namespace MeetNow
                 TeamsOperationQueue.CurrentStep = "Opening chat";
                 var chatUrl = $"https://teams.microsoft.com/l/chat/0/0?users={Uri.EscapeDataString(userId)}";
                 Log.Information("SimulateTyping: navigating to {Url}", chatUrl);
-                await instance.NavigateAndWaitAsync(chatUrl);
+                await NavigateOnUiThread(instance,chatUrl);
                 await Task.Delay(3000);
 
                 // Find the compose box
                 TeamsOperationQueue.CurrentStep = "Finding compose box";
-                var composeFound = await instance.EvaluateJsAsync(@"(function() {
+                var composeFound = await EvalOnUiThread(instance,@"(function() {
                     var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
                          || document.querySelector('[role=""textbox""][contenteditable=""true""]')
                          || document.querySelector('div[contenteditable=""true""]');
@@ -198,7 +214,7 @@ namespace MeetNow
 
                 // Type "Hi" — sender sees "is typing..."
                 TeamsOperationQueue.CurrentStep = "Typing indicator active";
-                await instance.EvaluateJsAsync(@"(function() {
+                await EvalOnUiThread(instance,@"(function() {
                     var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
                          || document.querySelector('[role=""textbox""][contenteditable=""true""]')
                          || document.querySelector('div[contenteditable=""true""]');
@@ -214,7 +230,7 @@ namespace MeetNow
 
                 // Clear the text without sending
                 TeamsOperationQueue.CurrentStep = "Clearing text";
-                await instance.EvaluateJsAsync(@"(function() {
+                await EvalOnUiThread(instance,@"(function() {
                     var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
                          || document.querySelector('[role=""textbox""][contenteditable=""true""]')
                          || document.querySelector('div[contenteditable=""true""]');
@@ -269,12 +285,12 @@ namespace MeetNow
                 TeamsOperationQueue.CurrentStep = "Opening chat";
                 var chatUrl = $"https://teams.microsoft.com/l/chat/0/0?users={Uri.EscapeDataString(userId)}";
                 Log.Information("SendMessage: navigating to {Url}", chatUrl);
-                await instance.NavigateAndWaitAsync(chatUrl);
+                await NavigateOnUiThread(instance,chatUrl);
                 await Task.Delay(3000);
 
                 // Find the compose box
                 TeamsOperationQueue.CurrentStep = "Finding compose box";
-                var composeFound = await instance.EvaluateJsAsync(@"(function() {
+                var composeFound = await EvalOnUiThread(instance,@"(function() {
                     var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
                          || document.querySelector('[role=""textbox""][contenteditable=""true""]')
                          || document.querySelector('div[contenteditable=""true""]');
@@ -293,7 +309,7 @@ namespace MeetNow
                 // Type the message
                 TeamsOperationQueue.CurrentStep = "Typing message";
                 var escapedMessage = message.Replace("\\", "\\\\").Replace("'", "\\'").Replace("\n", "\\n").Replace("\r", "");
-                await instance.EvaluateJsAsync($@"(function() {{
+                await EvalOnUiThread(instance,$@"(function() {{
                     var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
                          || document.querySelector('[role=""textbox""][contenteditable=""true""]')
                          || document.querySelector('div[contenteditable=""true""]');
@@ -306,7 +322,7 @@ namespace MeetNow
 
                 // Press Enter to send
                 TeamsOperationQueue.CurrentStep = "Sending message";
-                await instance.EvaluateJsAsync(@"(function() {
+                await EvalOnUiThread(instance,@"(function() {
                     var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
                          || document.querySelector('[role=""textbox""][contenteditable=""true""]')
                          || document.querySelector('div[contenteditable=""true""]');
@@ -384,7 +400,7 @@ namespace MeetNow
         {
             try
             {
-                await instance.NavigateAndWaitAsync("https://teams.microsoft.com");
+                await NavigateOnUiThread(instance,"https://teams.microsoft.com");
                 await Task.Delay(1000);
             }
             catch (Exception ex)
