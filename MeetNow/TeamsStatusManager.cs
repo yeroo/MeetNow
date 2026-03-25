@@ -98,7 +98,36 @@ namespace MeetNow
 
                     if (searchFound != "found")
                     {
-                        Log.Warning("SetStatus: could not find search input after clicking button");
+                        // Dump DOM diagnostics to understand Teams v2 structure
+                        var diag = await EvalOnUiThread(instance, @"(function() {
+                            var inputs = document.querySelectorAll('input');
+                            var buttons = document.querySelectorAll('button');
+                            var inputInfo = [];
+                            for (var i = 0; i < inputs.length && i < 10; i++) {
+                                inputInfo.push({
+                                    tag: 'input',
+                                    type: inputs[i].type,
+                                    id: inputs[i].id,
+                                    ariaLabel: (inputs[i].getAttribute('aria-label') || '').substring(0, 80),
+                                    placeholder: (inputs[i].placeholder || '').substring(0, 80),
+                                    className: (inputs[i].className || '').substring(0, 60)
+                                });
+                            }
+                            var btnInfo = [];
+                            for (var j = 0; j < buttons.length && j < 20; j++) {
+                                var label = buttons[j].getAttribute('aria-label') || '';
+                                var text = (buttons[j].textContent || '').trim();
+                                if (label.length > 0 || text.length > 0) {
+                                    btnInfo.push({
+                                        ariaLabel: label.substring(0, 80),
+                                        text: text.substring(0, 40),
+                                        id: buttons[j].id
+                                    });
+                                }
+                            }
+                            return JSON.stringify({ url: location.href, title: document.title, inputs: inputInfo, buttons: btnInfo });
+                        })();");
+                        Log.Warning("SetStatus: DOM diagnostic: {Diag}", diag);
                         TeamsOperationQueue.CurrentStep = "Failed — search input not found";
                         return false;
                     }
