@@ -245,7 +245,7 @@ namespace MeetNow
             {
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(
                     () => instance.TypeCharAsync(ch)).Task.Unwrap();
-                await Task.Delay(50);
+                await Task.Delay(80);
             }
 
             // Wait for suggestions to appear

@@ -131,15 +131,34 @@ namespace MeetNow
         }
 
         /// <summary>
-        /// Type a character via CDP Input.dispatchKeyEvent with char event.
+        /// Type a character via CDP Input.dispatchKeyEvent with full keyDown+char+keyUp sequence.
         /// </summary>
         public async Task TypeCharAsync(char c)
         {
             if (_webView?.CoreWebView2 == null) return;
             try
             {
-                var charJson = $"{{\"type\":\"char\",\"text\":\"{c}\"}}";
-                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", charJson);
+                // Escape special JSON characters
+                var text = c switch
+                {
+                    '"' => "\\\"",
+                    '\\' => "\\\\",
+                    '\n' => "\\n",
+                    '\r' => "\\r",
+                    '\t' => "\\t",
+                    _ => c.ToString()
+                };
+
+                var key = c.ToString();
+                var vkCode = char.IsLetterOrDigit(c) ? (int)char.ToUpper(c) : 0;
+
+                // Full sequence: keyDown, char, keyUp
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent",
+                    $"{{\"type\":\"rawKeyDown\",\"key\":\"{text}\",\"text\":\"{text}\",\"windowsVirtualKeyCode\":{vkCode}}}");
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent",
+                    $"{{\"type\":\"char\",\"text\":\"{text}\"}}");
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent",
+                    $"{{\"type\":\"keyUp\",\"key\":\"{text}\",\"windowsVirtualKeyCode\":{vkCode}}}");
             }
             catch (Exception ex)
             {
