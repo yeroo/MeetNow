@@ -232,100 +232,30 @@ namespace MeetNow
             await NavigateOnUiThread(instance, "https://teams.microsoft.com");
             await Task.Delay(2000);
 
-            // Try "New message" button first (more reliable than search for opening chat)
-            TeamsOperationQueue.CurrentStep = "Opening new chat";
-            var newChatResult = await EvalOnUiThread(instance, @"(function() {
-                // Click 'New message' or 'New chat' button
-                var btn = document.querySelector('button[aria-label*=""New message""]')
-                       || document.querySelector('button[aria-label*=""New chat""]')
-                       || document.querySelector('button[aria-label*=""new message"" i]');
-                if (btn) { btn.click(); return 'clicked'; }
-                return 'not_found';
-            })();");
-            Log.Information("{Prefix}: new chat button = {Result}", logPrefix, newChatResult);
+            // Open new chat via Alt+Shift+N shortcut (CDP)
+            TeamsOperationQueue.CurrentStep = "Opening new chat (Alt+Shift+N)";
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.SendShortcutAsync("n", alt: true, shift: true)).Task.Unwrap();
+            Log.Information("{Prefix}: sent Alt+Shift+N", logPrefix);
+            await Task.Delay(2000);
 
-            if (newChatResult == "clicked")
+            // Type the recipient in the To field via CDP
+            TeamsOperationQueue.CurrentStep = $"Typing recipient: {searchQuery}";
+            foreach (var ch in searchQuery)
             {
-                await Task.Delay(1500);
-
-                // Find the "To" field and type the search query
-                TeamsOperationQueue.CurrentStep = $"Typing recipient: {searchQuery}";
-
-                // Focus the To field
-                await EvalOnUiThread(instance, @"(function() {
-                    var toField = document.querySelector('input[aria-label*=""To""]')
-                              || document.querySelector('input[placeholder*=""name"" i]')
-                              || document.querySelector('input[placeholder*=""email"" i]')
-                              || document.querySelector('[data-tid*=""new-chat""] input');
-                    if (toField) { toField.focus(); toField.click(); }
-                })();");
-                await Task.Delay(500);
-
-                // Type via CDP
-                foreach (var ch in searchQuery)
-                {
-                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
-                    await Task.Delay(50);
-                }
-
-                // Wait for suggestions
-                await Task.Delay(2000);
-
-                // Press Enter to select first suggestion
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                    () => instance.SendEnterAsync()).Task.Unwrap();
-                await Task.Delay(1000);
-
-                // Tab to move to compose box
-                TeamsOperationQueue.CurrentStep = "Moving to compose box";
-                await EvalOnUiThread(instance, @"(function() {
-                    // Press Tab to move focus from To field to compose box
-                    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', keyCode: 9, bubbles: true}));
-                })();");
-                await Task.Delay(500);
+                    () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                await Task.Delay(50);
             }
-            else
-            {
-                // Fallback: use search box approach
-                TeamsOperationQueue.CurrentStep = "Opening search";
-                await EvalOnUiThread(instance, @"(function() {
-                    var el = document.querySelector('#ms-searchux-input')
-                         || document.querySelector('input[type=""search""]');
-                    if (el) { el.focus(); el.click(); el.select(); }
-                })();");
-                await Task.Delay(500);
 
-                TeamsOperationQueue.CurrentStep = $"Searching for {searchQuery}";
-                foreach (var ch in searchQuery)
-                {
-                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
-                    await Task.Delay(50);
-                }
+            // Wait for suggestions to appear
+            await Task.Delay(2000);
 
-                await Task.Delay(2000);
-
-                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                    () => instance.SendEnterAsync()).Task.Unwrap();
-                await Task.Delay(2000);
-
-                // Click People tab
-                TeamsOperationQueue.CurrentStep = "Selecting person";
-                var clickResult = await EvalOnUiThread(instance, @"(function() {
-                    var tabs = document.querySelectorAll('[role=""tab""]');
-                    for (var i = 0; i < tabs.length; i++) {
-                        if ((tabs[i].textContent || '').indexOf('People') >= 0) {
-                            tabs[i].click();
-                            return 'people_tab_clicked';
-                        }
-                    }
-                    return 'no_people_tab';
-                })();");
-
-                if (clickResult == "people_tab_clicked")
-                    await Task.Delay(1500);
-            }
+            // Press Enter to select first suggestion
+            TeamsOperationQueue.CurrentStep = "Selecting recipient";
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.SendEnterAsync()).Task.Unwrap();
+            await Task.Delay(1500);
 
             // Dump search results DOM for debugging
             var resultsDump = await EvalOnUiThread(instance, @"(function() {

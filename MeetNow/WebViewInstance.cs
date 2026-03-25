@@ -168,6 +168,36 @@ namespace MeetNow
             }
         }
 
+        /// <summary>
+        /// Send a keyboard shortcut via CDP (e.g. Alt+Shift+N).
+        /// </summary>
+        public async Task SendShortcutAsync(string key, bool alt = false, bool shift = false, bool ctrl = false)
+        {
+            if (_webView?.CoreWebView2 == null) return;
+            try
+            {
+                int modifiers = 0;
+                if (alt) modifiers |= 1;
+                if (ctrl) modifiers |= 2;
+                if (shift) modifiers |= 8;
+
+                var vkCode = key.Length == 1 ? (int)char.ToUpper(key[0]) : 0;
+                if (key == "Enter") vkCode = 13;
+                if (key == "Tab") vkCode = 9;
+                if (key == "Escape") vkCode = 27;
+
+                var keyDown = $"{{\"type\":\"rawKeyDown\",\"key\":\"{key}\",\"code\":\"Key{key.ToUpper()}\",\"windowsVirtualKeyCode\":{vkCode},\"nativeVirtualKeyCode\":{vkCode},\"modifiers\":{modifiers}}}";
+                var keyUp = $"{{\"type\":\"keyUp\",\"key\":\"{key}\",\"code\":\"Key{key.ToUpper()}\",\"windowsVirtualKeyCode\":{vkCode},\"nativeVirtualKeyCode\":{vkCode},\"modifiers\":{modifiers}}}";
+
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", keyDown);
+                await _webView.CoreWebView2.CallDevToolsProtocolMethodAsync("Input.dispatchKeyEvent", keyUp);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "WebViewInstance [{Name}] SendShortcutAsync failed", Name);
+            }
+        }
+
         public async Task<bool> HeartbeatAsync()
         {
             try
