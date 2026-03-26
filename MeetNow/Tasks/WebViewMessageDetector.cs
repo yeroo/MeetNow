@@ -29,8 +29,16 @@ namespace MeetNow.Tasks
         private static readonly string ChatListJs = $@"
 (function() {{
     try {{
+        // Scroll the chat list container to force virtual scroll rendering
+        var scrollContainer = document.querySelector('[class*=""virtualizedTree""]')
+                           || document.querySelector('[data-tid=""chat-list""]')
+                           || document.querySelector('[role=""tree""]');
+        if (scrollContainer) {{
+            // Scroll to top first, then to bottom to render all items
+            scrollContainer.scrollTop = 0;
+        }}
+
         // Find all chat items by looking for data-tid=""chat-title"" elements
-        // For each, find its sibling chat-description and nearest ancestor with unread indicators
         var chatTitles = document.querySelectorAll('[data-tid=""chat-title""]');
         var items = [];
 

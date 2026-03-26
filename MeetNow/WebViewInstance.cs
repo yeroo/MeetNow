@@ -45,7 +45,7 @@ namespace MeetNow
             _hostWindow = new Window
             {
                 Title = $"MeetNow WebView [{Name}]",
-                Width = 1200, Height = 800,
+                Width = 1200, Height = 3000, // tall to render more virtual-scrolled items
                 Left = -10000, Top = -10000,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.ToolWindow
