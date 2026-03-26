@@ -29,15 +29,28 @@ namespace MeetNow.Tasks
         private static readonly string ChatListJs = $@"
 (function() {{
     try {{
-        // Find all chat-title elements and work upward to their chat item container
+        // Find all chat-title elements and walk up to their chat item container
         var chatTitles = document.querySelectorAll('[data-tid=""chat-title""]');
         var items = [];
+        var seenContainers = new Set();
         for (var k = 0; k < chatTitles.length; k++) {{
-            // Walk up to find the closest treeitem or clickable container
-            var container = chatTitles[k].closest('[role=""treeitem""]')
-                         || chatTitles[k].closest('[role=""listitem""]')
-                         || chatTitles[k].parentElement?.parentElement; // fallback: grandparent
-            if (container) items.push({{ container: container, titleEl: chatTitles[k] }});
+            // Walk up to find the nearest container with both title and description
+            var el = chatTitles[k].parentElement;
+            var container = null;
+            for (var depth = 0; depth < 8 && el; depth++) {{
+                if (el.querySelector('[data-tid=""chat-description""]')) {{
+                    container = el;
+                    break;
+                }}
+                el = el.parentElement;
+            }}
+            // Fallback: just use grandparent
+            if (!container) container = chatTitles[k].parentElement?.parentElement;
+            // Deduplicate containers (avoid counting the same chat item twice)
+            if (container && !seenContainers.has(container)) {{
+                seenContainers.add(container);
+                items.push({{ container: container, titleEl: chatTitles[k] }});
+            }}
         }}
 
         var unread = [];
