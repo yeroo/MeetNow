@@ -30,66 +30,49 @@ namespace MeetNow.Tasks
 (function() {{
     try {{
         // Teams v2 uses role=""treeitem"" for chat list items
-        var items = document.querySelectorAll('[role=""treeitem""]');
-        // Fallback to role=""listitem"" for older Teams versions
-        if (items.length === 0) items = document.querySelectorAll('[role=""listitem""]');
+        var allTreeItems = document.querySelectorAll('[role=""treeitem""]');
+        if (allTreeItems.length === 0) allTreeItems = document.querySelectorAll('[role=""listitem""]');
+
+        // Filter to only actual chat items (must have chat-title child)
+        var items = [];
+        for (var k = 0; k < allTreeItems.length; k++) {{
+            if (allTreeItems[k].querySelector('[data-tid=""chat-title""]')) {{
+                items.push(allTreeItems[k]);
+            }}
+        }}
+
         var unread = [];
 
         for (var i = 0; i < items.length && unread.length < {MaxUnreadItems}; i++) {{
             var item = items[i];
 
-            // Check for unread indicators
-            // Teams v2 uses CounterBadge for unread count
-            var badgeEl = item.querySelector('[class*=""CounterBadge""], [class*=""badge"" i], [class*=""unread"" i]');
-            var hasUnreadBadge = !!badgeEl;
-            var ariaLabel = (item.getAttribute('aria-label') || '').toLowerCase();
-            var hasUnreadAria = ariaLabel.indexOf('unread') >= 0 || ariaLabel.indexOf('new message') >= 0;
-
-            // Check for bold text (Teams bolds unread chat names)
-            var hasBoldText = false;
-            var titleEl = item.querySelector('[data-tid=""chat-title""]');
-            if (titleEl) {{
-                var fontWeight = window.getComputedStyle(titleEl).fontWeight;
-                hasBoldText = fontWeight === 'bold' || fontWeight === '700' || parseInt(fontWeight) >= 600;
-            }}
-
-            if (!hasUnreadBadge && !hasUnreadAria && !hasBoldText) continue;
-
-            // Extract raw aria-label for deduplication/parsing
-            var rawAria = item.getAttribute('aria-label') || '';
-
-            // Extract sender from data-tid=""chat-title"" (Teams v2)
-            var sender = '';
+            // Extract sender from data-tid=""chat-title""
             var chatTitleEl = item.querySelector('[data-tid=""chat-title""]');
-            if (chatTitleEl) {{
-                sender = chatTitleEl.textContent.trim();
-            }}
-            if (!sender && rawAria) {{
-                var parts = rawAria.split(',');
-                sender = parts[0].trim();
-            }}
-            if (!sender) {{
-                var lines = (item.textContent || '').trim().split('\n');
-                sender = lines[0].trim();
-            }}
+            var sender = chatTitleEl ? chatTitleEl.textContent.trim() : '';
+            if (!sender) continue; // skip items without a title
 
-            // Extract content from data-tid=""chat-description"" (Teams v2)
-            var content = '';
+            // Extract content from data-tid=""chat-description""
             var descEl = item.querySelector('[data-tid=""chat-description""]');
-            if (descEl) {{
-                content = descEl.textContent.trim();
-            }}
-            if (!content) {{
-                var previewEl = item.querySelector('[class*=""preview"" i], [class*=""subtitle"" i]');
-                if (previewEl) content = previewEl.textContent.trim();
-            }}
-            if (!content && rawAria) {{
-                var ariaParts = rawAria.split(',');
-                if (ariaParts.length > 1) content = ariaParts.slice(1).join(',').trim();
+            var content = descEl ? descEl.textContent.trim() : '';
+
+            // Check for unread indicators
+            // 1. CounterBadge with a number (e.g. ""1"", ""3"")
+            var badgeEl = item.querySelector('[class*=""CounterBadge""]');
+            var badgeCount = badgeEl ? (badgeEl.textContent || '').trim() : '';
+            var hasUnreadBadge = badgeCount.length > 0 && badgeCount !== '0';
+
+            // 2. Bold title = unread (check computed font-weight >= 600)
+            var hasBoldTitle = false;
+            if (chatTitleEl) {{
+                var fw = window.getComputedStyle(chatTitleEl).fontWeight;
+                hasBoldTitle = fw === 'bold' || fw === '700' || parseInt(fw) >= 600;
             }}
 
-            // Badge count (if any)
-            var badgeCount = badgeEl ? (badgeEl.textContent || '').trim() : '';
+            // 3. Aria-label unread indicator
+            var rawAria = item.getAttribute('aria-label') || '';
+            var hasUnreadAria = rawAria.toLowerCase().indexOf('unread') >= 0;
+
+            if (!hasUnreadBadge && !hasBoldTitle && !hasUnreadAria) continue;
 
             // Detect mention
             var isMention = content.indexOf('@') >= 0
@@ -102,16 +85,15 @@ namespace MeetNow.Tasks
             if (ariaLower.indexOf('channel') >= 0) threadType = 'space';
             else if (ariaLower.indexOf('meeting') >= 0) threadType = 'meeting';
 
-            if (sender || content) {{
-                unread.push({{
-                    sender: sender.substring(0, 200),
-                    content: content.substring(0, 500),
-                    threadType: threadType,
-                    isMention: isMention,
-                    badge: badgeCount,
-                    ariaLabel: rawAria.substring(0, 300)
-                }});
-            }}
+            unread.push({{
+                sender: sender.substring(0, 200),
+                content: content.substring(0, 500),
+                threadType: threadType,
+                isMention: isMention,
+                badge: badgeCount,
+                bold: hasBoldTitle,
+                ariaLabel: rawAria.substring(0, 300)
+            }});
         }}
 
         return JSON.stringify({{ total: items.length, unread: unread }});
