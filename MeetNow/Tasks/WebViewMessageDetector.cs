@@ -29,33 +29,42 @@ namespace MeetNow.Tasks
         private static readonly string ChatListJs = $@"
 (function() {{
     try {{
-        var items = document.querySelectorAll('[role=""listitem""]');
+        // Teams v2 uses role=""treeitem"" for chat list items
+        var items = document.querySelectorAll('[role=""treeitem""]');
+        // Fallback to role=""listitem"" for older Teams versions
+        if (items.length === 0) items = document.querySelectorAll('[role=""listitem""]');
         var unread = [];
 
         for (var i = 0; i < items.length && unread.length < {MaxUnreadItems}; i++) {{
             var item = items[i];
 
             // Check for unread indicators
-            var hasUnreadBadge = !!item.querySelector('[class*=""badge""], [class*=""unread""]');
+            // Teams v2 uses CounterBadge for unread count
+            var badgeEl = item.querySelector('[class*=""CounterBadge""], [class*=""badge"" i], [class*=""unread"" i]');
+            var hasUnreadBadge = !!badgeEl;
             var ariaLabel = (item.getAttribute('aria-label') || '').toLowerCase();
             var hasUnreadAria = ariaLabel.indexOf('unread') >= 0 || ariaLabel.indexOf('new message') >= 0;
 
-            // Check for bold text (common unread indicator in Teams)
-            var hasBoldText = !!item.querySelector('b, strong');
+            // Check for bold text (Teams bolds unread chat names)
+            var hasBoldText = false;
+            var titleEl = item.querySelector('[data-tid=""chat-title""]');
+            if (titleEl) {{
+                var fontWeight = window.getComputedStyle(titleEl).fontWeight;
+                hasBoldText = fontWeight === 'bold' || fontWeight === '700' || parseInt(fontWeight) >= 600;
+            }}
 
             if (!hasUnreadBadge && !hasUnreadAria && !hasBoldText) continue;
 
             // Extract raw aria-label for deduplication/parsing
             var rawAria = item.getAttribute('aria-label') || '';
 
-            // Extract sender: first segment of aria-label or name/title/sender elements
+            // Extract sender from data-tid=""chat-title"" (Teams v2)
             var sender = '';
-            var senderEl = item.querySelector('[class*=""name""], [class*=""title""], [class*=""sender""]');
-            if (senderEl) {{
-                sender = senderEl.textContent.trim();
+            var chatTitleEl = item.querySelector('[data-tid=""chat-title""]');
+            if (chatTitleEl) {{
+                sender = chatTitleEl.textContent.trim();
             }}
             if (!sender && rawAria) {{
-                // aria-label often starts with sender name
                 var parts = rawAria.split(',');
                 sender = parts[0].trim();
             }}
@@ -64,37 +73,34 @@ namespace MeetNow.Tasks
                 sender = lines[0].trim();
             }}
 
-            // Extract content preview: second line of text or dedicated preview element
+            // Extract content from data-tid=""chat-description"" (Teams v2)
             var content = '';
-            var previewEl = item.querySelector('[class*=""preview""], [class*=""content""], [class*=""subtitle""], [class*=""message""]');
-            if (previewEl) {{
-                content = previewEl.textContent.trim();
+            var descEl = item.querySelector('[data-tid=""chat-description""]');
+            if (descEl) {{
+                content = descEl.textContent.trim();
             }}
             if (!content) {{
-                var allText = (item.textContent || '').trim().split('\n');
-                // Skip blank lines and use the second non-empty line as content
-                var nonEmpty = allText.filter(function(l) {{ return l.trim().length > 0; }});
-                if (nonEmpty.length > 1) content = nonEmpty[1].trim();
+                var previewEl = item.querySelector('[class*=""preview"" i], [class*=""subtitle"" i]');
+                if (previewEl) content = previewEl.textContent.trim();
             }}
             if (!content && rawAria) {{
                 var ariaParts = rawAria.split(',');
-                if (ariaParts.length > 1) content = ariaParts[1].trim();
+                if (ariaParts.length > 1) content = ariaParts.slice(1).join(',').trim();
             }}
+
+            // Badge count (if any)
+            var badgeCount = badgeEl ? (badgeEl.textContent || '').trim() : '';
 
             // Detect mention
             var isMention = content.indexOf('@') >= 0
-                || rawAria.toLowerCase().indexOf('@mention') >= 0
-                || rawAria.toLowerCase().indexOf('you were mentioned') >= 0
-                || !!item.querySelector('[class*=""mention""]');
+                || rawAria.toLowerCase().indexOf('mention') >= 0
+                || !!item.querySelector('[class*=""mention"" i]');
 
-            // Detect thread type from aria-label keywords
+            // Detect thread type
             var threadType = 'chat';
             var ariaLower = rawAria.toLowerCase();
-            if (ariaLower.indexOf('channel') >= 0 || ariaLower.indexOf('team') >= 0) {{
-                threadType = 'space';
-            }} else if (ariaLower.indexOf('meeting') >= 0 || ariaLower.indexOf('call') >= 0) {{
-                threadType = 'meeting';
-            }}
+            if (ariaLower.indexOf('channel') >= 0) threadType = 'space';
+            else if (ariaLower.indexOf('meeting') >= 0) threadType = 'meeting';
 
             if (sender || content) {{
                 unread.push({{
@@ -102,6 +108,7 @@ namespace MeetNow.Tasks
                     content: content.substring(0, 500),
                     threadType: threadType,
                     isMention: isMention,
+                    badge: badgeCount,
                     ariaLabel: rawAria.substring(0, 300)
                 }});
             }}
