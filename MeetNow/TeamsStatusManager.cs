@@ -382,16 +382,34 @@ namespace MeetNow
         }
 
         /// <summary>
-        /// Clear the compose box using Ctrl+A then Backspace via CDP.
+        /// Clear the compose box using Ctrl+A then Backspace via CDP. Retries until empty.
         /// </summary>
         private static async Task ClearComposeBox(WebViewInstance instance)
         {
-            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                () => instance.SendShortcutAsync("a", ctrl: true)).Task.Unwrap();
-            await Task.Delay(100);
-            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                () => instance.SendKeyAsync("Backspace", 8)).Task.Unwrap();
-            await Task.Delay(200);
+            for (int attempt = 0; attempt < 10; attempt++)
+            {
+                // Check if already empty
+                var text = await EvalOnUiThread(instance, @"(function() {
+                    var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
+                         || document.querySelector('[role=""textbox""][contenteditable=""true""]')
+                         || document.querySelector('div[contenteditable=""true""]');
+                    return el ? el.textContent.trim() : '';
+                })();");
+
+                if (string.IsNullOrEmpty(text)) break;
+
+                Log.Information("ClearComposeBox: attempt {Attempt}, current text: '{Text}'", attempt + 1, text);
+
+                // Ctrl+A to select all
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendShortcutAsync("a", ctrl: true)).Task.Unwrap();
+                await Task.Delay(200);
+
+                // Backspace to delete
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendKeyAsync("Backspace", 8)).Task.Unwrap();
+                await Task.Delay(300);
+            }
         }
 
         /// <summary>
