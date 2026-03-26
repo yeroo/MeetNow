@@ -143,19 +143,14 @@ namespace MeetNow
             {
                 await WebViewManager.Instance.InitializeAsync();
 
-                // Start MessageMonitorTask on the persistent instance
+                // Start MessageMonitorTask and WebViewMessageDetector on the persistent instance
                 var persistent = WebViewManager.Instance.PersistentInstance;
                 if (persistent != null)
                 {
-                    // Wait for Teams to load before injecting hooks
-                    persistent.CoreWebView2!.NavigationCompleted += async (s, e) =>
-                    {
-                        if (e.IsSuccess && persistent.CurrentUrl?.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase) == true)
-                        {
-                            await Tasks.MessageMonitorTask.StartAsync(persistent);
-                            Tasks.WebViewMessageDetector.StartListening(persistent);
-                        }
-                    };
+                    // Start immediately — WebViewManager already navigated and waited
+                    await Task.Delay(5000); // Give Teams web time to fully render
+                    await Tasks.MessageMonitorTask.StartAsync(persistent);
+                    Tasks.WebViewMessageDetector.StartListening(persistent);
                 }
 
                 // CalendarCollectorTask is now a persistent listener on its own
