@@ -67,8 +67,8 @@ namespace MeetNow
 
                 _initialized = true;
 
-                // Start persistent instance (MessageMonitor on Teams Chat tab)
-                await StartPersistentAsync("https://teams.microsoft.com/v2/#/conversations");
+                // Start persistent instance (MessageMonitor on Teams Activity feed)
+                await StartPersistentAsync("https://teams.microsoft.com/v2/#/activity");
 
                 // Start calendar monitor instance (dedicated WebView for Outlook calendar)
                 await StartCalendarMonitorAsync();
