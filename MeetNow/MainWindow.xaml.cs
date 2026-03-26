@@ -153,6 +153,7 @@ namespace MeetNow
                         if (e.IsSuccess && persistent.CurrentUrl?.Contains("teams.microsoft.com", StringComparison.OrdinalIgnoreCase) == true)
                         {
                             await Tasks.MessageMonitorTask.StartAsync(persistent);
+                            Tasks.WebViewMessageDetector.StartListening(persistent);
                         }
                     };
                 }
@@ -285,6 +286,7 @@ namespace MeetNow
 
                 _teamsMonitor = new TeamsMessageMonitor(username);
                 _teamsMonitor.NewMessageDetected += OnTeamsMessageDetected;
+                Tasks.WebViewMessageDetector.NewMessageDetected += OnTeamsMessageDetected;
                 if (_teamsMonitor.Start())
                 {
                     Log.Information("Teams monitor: LevelDB polling active as supplement");
@@ -366,6 +368,7 @@ namespace MeetNow
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
+            Tasks.WebViewMessageDetector.StopListening();
             Tasks.MessageMonitorTask.Stop();
             WebViewManager.Instance.Shutdown();
             ContactDatabase.FlushAndDispose();
