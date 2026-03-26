@@ -29,67 +29,61 @@ namespace MeetNow.Tasks
         private static readonly string ChatListJs = $@"
 (function() {{
     try {{
-        // Find all chat-title elements and walk up to their chat item container
+        // Find all chat items by looking for data-tid=""chat-title"" elements
+        // For each, find its sibling chat-description and nearest ancestor with unread indicators
         var chatTitles = document.querySelectorAll('[data-tid=""chat-title""]');
         var items = [];
-        var seenContainers = new Set();
-        for (var k = 0; k < chatTitles.length; k++) {{
-            // Walk up to find the nearest container with both title and description
-            var el = chatTitles[k].parentElement;
-            var container = null;
-            for (var depth = 0; depth < 8 && el; depth++) {{
-                if (el.querySelector('[data-tid=""chat-description""]')) {{
-                    container = el;
-                    break;
-                }}
-                el = el.parentElement;
-            }}
-            // Fallback: just use grandparent
-            if (!container) container = chatTitles[k].parentElement?.parentElement;
-            // Deduplicate containers (avoid counting the same chat item twice)
-            if (container && !seenContainers.has(container)) {{
-                seenContainers.add(container);
-                items.push({{ container: container, titleEl: chatTitles[k] }});
-            }}
-        }}
 
         var unread = [];
 
-        for (var i = 0; i < items.length && unread.length < {MaxUnreadItems}; i++) {{
-            var container = items[i].container;
-            var chatTitleEl = items[i].titleEl;
-
-            // Extract sender
+        for (var i = 0; i < chatTitles.length && unread.length < {MaxUnreadItems}; i++) {{
+            var chatTitleEl = chatTitles[i];
             var sender = chatTitleEl.textContent.trim();
             if (!sender) continue;
 
-            // Extract content from data-tid=""chat-description""
-            var descEl = container.querySelector('[data-tid=""chat-description""]');
-            var content = descEl ? descEl.textContent.trim() : '';
+            // Find chat-description as a sibling by walking up to common ancestor
+            var content = '';
+            var ancestor = chatTitleEl.parentElement;
+            for (var d = 0; d < 5 && ancestor; d++) {{
+                var descEl = ancestor.querySelector('[data-tid=""chat-description""]');
+                if (descEl) {{ content = descEl.textContent.trim(); break; }}
+                ancestor = ancestor.parentElement;
+            }}
 
-            // Check for unread indicators
-            // 1. CounterBadge with a number
-            var badgeEl = container.querySelector('[class*=""CounterBadge""]');
-            var badgeCount = badgeEl ? (badgeEl.textContent || '').trim() : '';
+            // Find unread indicators by walking up to find badge or checking bold
+            var badgeCount = '';
+            var hasBoldTitle = false;
+            var rawAria = '';
+            var scanEl = chatTitleEl.parentElement;
+            for (var d2 = 0; d2 < 8 && scanEl; d2++) {{
+                // Badge
+                if (!badgeCount) {{
+                    var badgeEl = scanEl.querySelector('[class*=""CounterBadge""]');
+                    if (badgeEl) badgeCount = (badgeEl.textContent || '').trim();
+                }}
+                // Aria-label
+                if (!rawAria) {{
+                    var a = scanEl.getAttribute('aria-label') || '';
+                    if (a.length > 10) rawAria = a;
+                }}
+                scanEl = scanEl.parentElement;
+            }}
+
             var hasUnreadBadge = badgeCount.length > 0 && badgeCount !== '0';
 
-            // 2. Bold title = unread
-            var hasBoldTitle = false;
+            // Bold check on the title element itself
             var fw = window.getComputedStyle(chatTitleEl).fontWeight;
             hasBoldTitle = fw === 'bold' || fw === '700' || parseInt(fw) >= 600;
 
-            // 3. Aria-label unread indicator
-            var rawAria = container.getAttribute('aria-label') || '';
             var hasUnreadAria = rawAria.toLowerCase().indexOf('unread') >= 0;
 
             if (!hasUnreadBadge && !hasBoldTitle && !hasUnreadAria) continue;
 
             // Detect mention
             var isMention = content.indexOf('@') >= 0
-                || rawAria.toLowerCase().indexOf('mention') >= 0
-                || !!container.querySelector('[class*=""mention"" i]');
+                || rawAria.toLowerCase().indexOf('mention') >= 0;
 
-            // Detect thread type
+            // Detect thread type from aria-label
             var threadType = 'chat';
             var ariaLower = rawAria.toLowerCase();
             if (ariaLower.indexOf('channel') >= 0) threadType = 'space';
@@ -104,6 +98,8 @@ namespace MeetNow.Tasks
                 bold: hasBoldTitle,
                 ariaLabel: rawAria.substring(0, 300)
             }});
+
+            items.push(chatTitleEl); // for total count
         }}
 
         return JSON.stringify({{ total: items.length, unread: unread }});
