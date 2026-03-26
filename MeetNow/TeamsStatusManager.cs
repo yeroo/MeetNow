@@ -382,8 +382,49 @@ namespace MeetNow
         }
 
         /// <summary>
+        /// Clear the compose box using Ctrl+A then Backspace via CDP.
+        /// </summary>
+        private static async Task ClearComposeBox(WebViewInstance instance)
+        {
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.SendShortcutAsync("a", ctrl: true)).Task.Unwrap();
+            await Task.Delay(100);
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.SendKeyAsync("Backspace", 8)).Task.Unwrap();
+            await Task.Delay(200);
+        }
+
+        /// <summary>
+        /// Type text in the compose box via CDP, with verification.
+        /// </summary>
+        private static async Task TypeInComposeBox(WebViewInstance instance, string text, string logPrefix)
+        {
+            // Clear any existing text first
+            TeamsOperationQueue.CurrentStep = "Clearing compose box";
+            await ClearComposeBox(instance);
+
+            // Type each char
+            TeamsOperationQueue.CurrentStep = $"Typing '{text}'";
+            foreach (var ch in text)
+            {
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                await Task.Delay(100);
+            }
+
+            // Verify
+            var typed = await EvalOnUiThread(instance, @"(function() {
+                var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
+                     || document.querySelector('[role=""textbox""][contenteditable=""true""]')
+                     || document.querySelector('div[contenteditable=""true""]');
+                return el ? el.textContent.trim() : '';
+            })();");
+            Log.Information("{Prefix}: compose box typed '{Typed}', expected '{Expected}'", logPrefix, typed, text);
+        }
+
+        /// <summary>
         /// Opens the 1:1 chat with the sender, types "Hi", waits (typing indicator shows),
-        /// then clears the text. Does not send anything.
+        /// then clears the text. Does not send anything. Does not reload the page.
         /// </summary>
         public static async Task<bool> SimulateTypingAsync(string senderName)
         {
@@ -401,34 +442,21 @@ namespace MeetNow
                 if (!await OpenChatViaSearch(instance, senderName, "SimulateTyping"))
                 {
                     TeamsOperationQueue.CurrentStep = "Failed — chat not opened";
-                    await NavigateBackToTeams(instance);
                     return false;
                 }
 
                 // Type "Hi" via CDP — sender sees "is typing..."
-                TeamsOperationQueue.CurrentStep = "Typing indicator active";
-                foreach (var ch in "Hi")
-                {
-                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
-                    await Task.Delay(80);
-                }
+                await TypeInComposeBox(instance, "Hi", "SimulateTyping");
 
                 // Hold for configured duration
+                TeamsOperationQueue.CurrentStep = "Typing indicator active";
                 var typingDuration = MeetNowSettings.Instance.SimulateTypingDurationSeconds * 1000;
                 Log.Information("SimulateTyping: holding for {Duration}s", typingDuration / 1000);
                 await Task.Delay(typingDuration);
 
-                // Select all + Delete to clear without sending
+                // Clear the text without sending (Ctrl+A + Backspace)
                 TeamsOperationQueue.CurrentStep = "Clearing text";
-                await EvalOnUiThread(instance, @"(function() {
-                    var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
-                         || document.querySelector('[role=""textbox""][contenteditable=""true""]')
-                         || document.querySelector('div[contenteditable=""true""]');
-                    if (el) { el.textContent = ''; el.dispatchEvent(new Event('input', {bubbles: true})); }
-                })();");
-
-                await NavigateBackToTeams(instance);
+                await ClearComposeBox(instance);
 
                 TeamsOperationQueue.CurrentStep = "Done";
                 Log.Information("SimulateTyping: complete for '{Name}'", senderName);
@@ -438,13 +466,12 @@ namespace MeetNow
             {
                 Log.Error(ex, "SimulateTyping: error for '{Name}'", senderName);
                 TeamsOperationQueue.CurrentStep = "Failed";
-                await NavigateBackToTeams(instance);
                 return false;
             }
         }
 
         /// <summary>
-        /// Opens the 1:1 chat and actually sends a message.
+        /// Opens the 1:1 chat and actually sends a message. Does not reload the page.
         /// </summary>
         public static async Task<bool> SendMessageAsync(string senderName, string message)
         {
@@ -462,18 +489,11 @@ namespace MeetNow
                 if (!await OpenChatViaSearch(instance, senderName, "SendMessage"))
                 {
                     TeamsOperationQueue.CurrentStep = "Failed — chat not opened";
-                    await NavigateBackToTeams(instance);
                     return false;
                 }
 
                 // Type the message via CDP
-                TeamsOperationQueue.CurrentStep = "Typing message";
-                foreach (var ch in message)
-                {
-                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
-                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
-                    await Task.Delay(30);
-                }
+                await TypeInComposeBox(instance, message, "SendMessage");
 
                 await Task.Delay(500);
 
@@ -483,7 +503,6 @@ namespace MeetNow
                     () => instance.SendEnterAsync()).Task.Unwrap();
 
                 await Task.Delay(1000);
-                await NavigateBackToTeams(instance);
 
                 TeamsOperationQueue.CurrentStep = "Done";
                 Log.Information("SendMessage: sent '{Message}' to '{Name}'", message, senderName);
@@ -493,7 +512,6 @@ namespace MeetNow
             {
                 Log.Error(ex, "SendMessage: error for '{Name}'", senderName);
                 TeamsOperationQueue.CurrentStep = "Failed";
-                await NavigateBackToTeams(instance);
                 return false;
             }
         }
