@@ -121,10 +121,20 @@ namespace MeetNow
                     () => TeamsStatusManager.SimulateTypingAsync(target));
             };
 
+            var test9MenuItem = new MenuItem();
+            test9MenuItem.Header = "Test: Send Message";
+            test9MenuItem.Click += (_, _) =>
+            {
+                var target = MeetNowSettings.Instance.ForwardToEmail ?? "test";
+                TeamsOperationQueue.Enqueue($"Send test message to {target}",
+                    () => TeamsStatusManager.SendMessageAsync(target, "Test message from MeetNow"));
+            };
+
             contextMenu.Items.Insert(5, test6MenuItem);
             contextMenu.Items.Insert(6, test7MenuItem);
             contextMenu.Items.Insert(7, test8MenuItem);
-            contextMenu.Items.Insert(8, separator);
+            contextMenu.Items.Insert(8, test9MenuItem);
+            contextMenu.Items.Insert(9, separator);
 #endif
         }
         private async void InitializeWebViewManager()
