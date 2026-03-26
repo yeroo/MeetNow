@@ -69,6 +69,16 @@ IsMention = content contains @username or has mention indicator
 - Urgency classification pipeline — unchanged
 - `MessageMonitorTask.cs` — WS hooks continue (for traffic logging)
 
+### Defensive DOM Approach
+
+All DOM interactions must follow defensive patterns:
+
+- **Retry DOM queries** — wrap in retry loops (up to 5 attempts, 1s apart). The chat list may not render immediately after page load.
+- **Verify results** — after each JS eval, check the return value. If null or unexpected, log and retry next cycle instead of crashing.
+- **Handle stale DOM** — the chat list is a React component that re-renders. Element references may become stale between queries within the same poll. Re-query each time.
+- **UI thread dispatch** — all `EvaluateJsAsync` calls must go through `Dispatcher.InvokeAsync` since the poll timer runs on a background/timer thread.
+- **Graceful degradation** — if the chat list DOM structure changes (Teams update), log what was found and continue. Never crash the poll loop.
+
 ### Safety
 
 - No API calls — pure DOM reads via `EvaluateJsAsync`
