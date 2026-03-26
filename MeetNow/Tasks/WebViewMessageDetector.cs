@@ -29,16 +29,11 @@ namespace MeetNow.Tasks
         private static readonly string ChatListJs = $@"
 (function() {{
     try {{
-        // Scroll the chat list container to force virtual scroll rendering
-        var scrollContainer = document.querySelector('[class*=""virtualizedTree""]')
-                           || document.querySelector('[data-tid=""chat-list""]')
-                           || document.querySelector('[role=""tree""]');
-        if (scrollContainer) {{
-            // Scroll to top first, then to bottom to render all items
-            scrollContainer.scrollTop = 0;
-        }}
+        // Read page title for unread count: ""(3) Chat | Microsoft Teams""
+        var titleMatch = document.title.match(/^\((\d+)\)/);
+        var titleUnreadCount = titleMatch ? parseInt(titleMatch[1]) : 0;
 
-        // Find all chat items by looking for data-tid=""chat-title"" elements
+        // Find all rendered chat items
         var chatTitles = document.querySelectorAll('[data-tid=""chat-title""]');
         var items = [];
 
@@ -115,7 +110,7 @@ namespace MeetNow.Tasks
         for (var z = 0; z < chatTitles.length && z < 3; z++) {{
             allTitles.push(chatTitles[z].textContent.trim().substring(0, 50));
         }}
-        return JSON.stringify({{ total: chatTitles.length, unreadCount: unread.length, firstTitles: allTitles, unread: unread }});
+        return JSON.stringify({{ total: chatTitles.length, unreadCount: unread.length, titleUnread: titleUnreadCount, pageTitle: document.title.substring(0, 80), firstTitles: allTitles, unread: unread }});
     }} catch (e) {{
         return JSON.stringify({{ error: e.message }});
     }}
