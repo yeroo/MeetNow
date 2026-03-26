@@ -102,7 +102,12 @@ namespace MeetNow.Tasks
             items.push(chatTitleEl); // for total count
         }}
 
-        return JSON.stringify({{ total: items.length, unread: unread }});
+        // Also log first 3 chat titles for debugging (even if not unread)
+        var allTitles = [];
+        for (var z = 0; z < chatTitles.length && z < 3; z++) {{
+            allTitles.push(chatTitles[z].textContent.trim().substring(0, 50));
+        }}
+        return JSON.stringify({{ total: chatTitles.length, unreadCount: unread.length, firstTitles: allTitles, unread: unread }});
     }} catch (e) {{
         return JSON.stringify({{ error: e.message }});
     }}
