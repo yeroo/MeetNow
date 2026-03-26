@@ -149,9 +149,12 @@ namespace MeetNow.Tasks
 
                 if (string.IsNullOrWhiteSpace(json))
                 {
-                    Log.Debug("WebViewMessageDetector: empty JS result");
+                    Log.Information("WebViewMessageDetector: empty JS result (page may be loading)");
                     return;
                 }
+
+                Log.Information("WebViewMessageDetector: poll result ({Len} chars): {Preview}",
+                    json.Length, json.Length > 300 ? json[..300] + "..." : json);
 
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
