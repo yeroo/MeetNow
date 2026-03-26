@@ -154,7 +154,59 @@ namespace MeetNow.Tasks
                 }
 
                 Log.Information("WebViewMessageDetector: poll result ({Len} chars): {Preview}",
-                    json.Length, json.Length > 300 ? json[..300] + "..." : json);
+                    json.Length, json.Length > 500 ? json[..500] + "..." : json);
+
+                // If no items found, dump DOM diagnostic to understand the structure
+                if (json.Contains("\"total\":0"))
+                {
+                    var diagJson = await Application.Current.Dispatcher.InvokeAsync(
+                        () => _instance.EvaluateJsAsync(@"
+(function() {
+    try {
+        var diag = {};
+        // Check various selectors
+        diag.listItems = document.querySelectorAll('[role=""listitem""]').length;
+        diag.treeItems = document.querySelectorAll('[role=""treeitem""]').length;
+        diag.options = document.querySelectorAll('[role=""option""]').length;
+        diag.rows = document.querySelectorAll('[role=""row""]').length;
+        diag.buttons = document.querySelectorAll('[role=""button""]').length;
+        diag.links = document.querySelectorAll('a[href]').length;
+
+        // Find elements with chat/conversation related classes or data attributes
+        var chatElements = document.querySelectorAll('[class*=""chat"" i], [class*=""conversation"" i], [data-tid*=""chat""], [data-tid*=""conversation""]');
+        diag.chatElements = chatElements.length;
+        var chatSamples = [];
+        for (var i = 0; i < chatElements.length && i < 5; i++) {
+            chatSamples.push({
+                tag: chatElements[i].tagName,
+                role: chatElements[i].getAttribute('role') || '',
+                class: (chatElements[i].className || '').substring(0, 80),
+                dataTid: chatElements[i].getAttribute('data-tid') || '',
+                ariaLabel: (chatElements[i].getAttribute('aria-label') || '').substring(0, 100),
+                childCount: chatElements[i].children.length
+            });
+        }
+        diag.chatSamples = chatSamples;
+
+        // Find elements with unread/badge indicators
+        var badges = document.querySelectorAll('[class*=""badge"" i], [class*=""unread"" i], [class*=""bold"" i]');
+        diag.badgeElements = badges.length;
+        var badgeSamples = [];
+        for (var j = 0; j < badges.length && j < 5; j++) {
+            badgeSamples.push({
+                tag: badges[j].tagName,
+                class: (badges[j].className || '').substring(0, 80),
+                text: (badges[j].textContent || '').trim().substring(0, 40),
+                parentTag: badges[j].parentElement ? badges[j].parentElement.tagName : ''
+            });
+        }
+        diag.badgeSamples = badgeSamples;
+
+        return JSON.stringify(diag);
+    } catch(e) { return JSON.stringify({error: e.message}); }
+})();")).Task.Unwrap();
+                    Log.Information("WebViewMessageDetector: DOM diagnostic: {Diag}", diagJson);
+                }
 
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
