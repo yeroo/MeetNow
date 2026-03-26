@@ -33,10 +33,11 @@ namespace MeetNow.Tasks
         var allTreeItems = document.querySelectorAll('[role=""treeitem""]');
         if (allTreeItems.length === 0) allTreeItems = document.querySelectorAll('[role=""listitem""]');
 
-        // Filter to only actual chat items (must have chat-title child)
+        // Filter to leaf treeitems only (no nested treeitems = actual chat items, not folders)
         var items = [];
         for (var k = 0; k < allTreeItems.length; k++) {{
-            if (allTreeItems[k].querySelector('[data-tid=""chat-title""]')) {{
+            var hasNestedTreeItem = allTreeItems[k].querySelector('[role=""treeitem""]');
+            if (!hasNestedTreeItem && allTreeItems[k].querySelector('[data-tid=""chat-title""]')) {{
                 items.push(allTreeItems[k]);
             }}
         }}
