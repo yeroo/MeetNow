@@ -230,7 +230,7 @@ namespace MeetNow
             // Navigate to Teams home first
             TeamsOperationQueue.CurrentStep = "Navigating to Teams";
             await NavigateOnUiThread(instance, "https://teams.microsoft.com");
-            await Task.Delay(2000);
+            await Task.Delay(5000); // Teams takes time to fully load
 
             // Open new chat via Alt+Shift+N shortcut (CDP)
             TeamsOperationQueue.CurrentStep = "Opening new chat (Alt+Shift+N)";
@@ -238,6 +238,24 @@ namespace MeetNow
                 () => instance.SendShortcutAsync("n", alt: true, shift: true)).Task.Unwrap();
             Log.Information("{Prefix}: sent Alt+Shift+N", logPrefix);
             await Task.Delay(3000); // Wait for new chat dialog to fully render
+
+            // Wait for the To field to appear and focus it (retry up to 5 times)
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                var focusResult = await EvalOnUiThread(instance, @"(function() {
+                    var toField = document.querySelector('input[aria-label*=""To""]')
+                              || document.querySelector('input[placeholder*=""name"" i]')
+                              || document.querySelector('input[placeholder*=""email"" i]')
+                              || document.querySelector('[data-tid*=""peoplepicker""] input')
+                              || document.querySelector('input[type=""text""]');
+                    if (toField) { toField.focus(); toField.click(); return 'focused'; }
+                    return 'not_found';
+                })();");
+                Log.Information("{Prefix}: To field focus attempt {Attempt}: {Result}", logPrefix, attempt + 1, focusResult);
+                if (focusResult == "focused") break;
+                await Task.Delay(1000);
+            }
+            await Task.Delay(500);
 
             // Type the recipient in the To field via CDP
             TeamsOperationQueue.CurrentStep = $"Typing recipient: {searchQuery}";
