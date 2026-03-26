@@ -147,8 +147,21 @@ namespace MeetNow
                 var persistent = WebViewManager.Instance.PersistentInstance;
                 if (persistent != null)
                 {
-                    // Start immediately — WebViewManager already navigated and waited
-                    await Task.Delay(5000); // Give Teams web time to fully render
+                    // Wait for Teams to load, then switch to Chat tab
+                    await Task.Delay(5000);
+
+                    // Click the Chat button to ensure chat list is visible
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(async () =>
+                    {
+                        await persistent.EvaluateJsAsync(@"(function() {
+                            var chatBtn = document.querySelector('button[aria-label*=""Chat""]')
+                                       || document.querySelector('[data-tid*=""chat""]');
+                            if (chatBtn) { chatBtn.click(); return 'clicked'; }
+                            return 'not_found';
+                        })();");
+                    }).Task.Unwrap();
+                    await Task.Delay(3000); // Wait for Chat tab to render
+
                     await Tasks.MessageMonitorTask.StartAsync(persistent);
                     Tasks.WebViewMessageDetector.StartListening(persistent);
                 }
