@@ -29,48 +29,44 @@ namespace MeetNow.Tasks
         private static readonly string ChatListJs = $@"
 (function() {{
     try {{
-        // Teams v2 uses role=""treeitem"" for chat list items
-        var allTreeItems = document.querySelectorAll('[role=""treeitem""]');
-        if (allTreeItems.length === 0) allTreeItems = document.querySelectorAll('[role=""listitem""]');
-
-        // Filter to leaf treeitems only (no nested treeitems = actual chat items, not folders)
+        // Find all chat-title elements and work upward to their chat item container
+        var chatTitles = document.querySelectorAll('[data-tid=""chat-title""]');
         var items = [];
-        for (var k = 0; k < allTreeItems.length; k++) {{
-            var hasNestedTreeItem = allTreeItems[k].querySelector('[role=""treeitem""]');
-            if (!hasNestedTreeItem && allTreeItems[k].querySelector('[data-tid=""chat-title""]')) {{
-                items.push(allTreeItems[k]);
-            }}
+        for (var k = 0; k < chatTitles.length; k++) {{
+            // Walk up to find the closest treeitem or clickable container
+            var container = chatTitles[k].closest('[role=""treeitem""]')
+                         || chatTitles[k].closest('[role=""listitem""]')
+                         || chatTitles[k].parentElement?.parentElement; // fallback: grandparent
+            if (container) items.push({{ container: container, titleEl: chatTitles[k] }});
         }}
 
         var unread = [];
 
         for (var i = 0; i < items.length && unread.length < {MaxUnreadItems}; i++) {{
-            var item = items[i];
+            var container = items[i].container;
+            var chatTitleEl = items[i].titleEl;
 
-            // Extract sender from data-tid=""chat-title""
-            var chatTitleEl = item.querySelector('[data-tid=""chat-title""]');
-            var sender = chatTitleEl ? chatTitleEl.textContent.trim() : '';
-            if (!sender) continue; // skip items without a title
+            // Extract sender
+            var sender = chatTitleEl.textContent.trim();
+            if (!sender) continue;
 
             // Extract content from data-tid=""chat-description""
-            var descEl = item.querySelector('[data-tid=""chat-description""]');
+            var descEl = container.querySelector('[data-tid=""chat-description""]');
             var content = descEl ? descEl.textContent.trim() : '';
 
             // Check for unread indicators
-            // 1. CounterBadge with a number (e.g. ""1"", ""3"")
-            var badgeEl = item.querySelector('[class*=""CounterBadge""]');
+            // 1. CounterBadge with a number
+            var badgeEl = container.querySelector('[class*=""CounterBadge""]');
             var badgeCount = badgeEl ? (badgeEl.textContent || '').trim() : '';
             var hasUnreadBadge = badgeCount.length > 0 && badgeCount !== '0';
 
-            // 2. Bold title = unread (check computed font-weight >= 600)
+            // 2. Bold title = unread
             var hasBoldTitle = false;
-            if (chatTitleEl) {{
-                var fw = window.getComputedStyle(chatTitleEl).fontWeight;
-                hasBoldTitle = fw === 'bold' || fw === '700' || parseInt(fw) >= 600;
-            }}
+            var fw = window.getComputedStyle(chatTitleEl).fontWeight;
+            hasBoldTitle = fw === 'bold' || fw === '700' || parseInt(fw) >= 600;
 
             // 3. Aria-label unread indicator
-            var rawAria = item.getAttribute('aria-label') || '';
+            var rawAria = container.getAttribute('aria-label') || '';
             var hasUnreadAria = rawAria.toLowerCase().indexOf('unread') >= 0;
 
             if (!hasUnreadBadge && !hasBoldTitle && !hasUnreadAria) continue;
@@ -78,7 +74,7 @@ namespace MeetNow.Tasks
             // Detect mention
             var isMention = content.indexOf('@') >= 0
                 || rawAria.toLowerCase().indexOf('mention') >= 0
-                || !!item.querySelector('[class*=""mention"" i]');
+                || !!container.querySelector('[class*=""mention"" i]');
 
             // Detect thread type
             var threadType = 'chat';
