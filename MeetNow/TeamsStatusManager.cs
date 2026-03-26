@@ -257,14 +257,50 @@ namespace MeetNow
             }
             await Task.Delay(500);
 
-            // Type the recipient in the To field via CDP
+            // Clear any existing text in the To field (backspace one by one, verify empty)
+            TeamsOperationQueue.CurrentStep = "Clearing To field";
+            for (int clearAttempt = 0; clearAttempt < 50; clearAttempt++)
+            {
+                var currentText = await EvalOnUiThread(instance, @"(function() {
+                    var toField = document.querySelector('input[aria-label*=""To""]')
+                              || document.querySelector('input[placeholder*=""name"" i]')
+                              || document.querySelector('input[placeholder*=""email"" i]')
+                              || document.querySelector('input[type=""text""]');
+                    return toField ? toField.value : '';
+                })();");
+
+                if (string.IsNullOrEmpty(currentText)) break;
+
+                Log.Information("{Prefix}: clearing To field, current: '{Text}'", logPrefix, currentText);
+
+                // Select all and delete
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendShortcutAsync("a", ctrl: true)).Task.Unwrap();
+                await Task.Delay(100);
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendKeyAsync("Backspace", 8)).Task.Unwrap();
+                await Task.Delay(200);
+            }
+            await Task.Delay(300);
+
+            // Type the recipient char by char, verifying each character is accepted
             TeamsOperationQueue.CurrentStep = $"Typing recipient: {searchQuery}";
             foreach (var ch in searchQuery)
             {
                 await System.Windows.Application.Current.Dispatcher.InvokeAsync(
                     () => instance.TypeCharAsync(ch)).Task.Unwrap();
-                await Task.Delay(120); // 120ms between chars to avoid drops
+                await Task.Delay(150);
             }
+
+            // Verify the typed text matches
+            var typedText = await EvalOnUiThread(instance, @"(function() {
+                var toField = document.querySelector('input[aria-label*=""To""]')
+                          || document.querySelector('input[placeholder*=""name"" i]')
+                          || document.querySelector('input[placeholder*=""email"" i]')
+                          || document.querySelector('input[type=""text""]');
+                return toField ? toField.value : '';
+            })();");
+            Log.Information("{Prefix}: typed '{Typed}', expected '{Expected}'", logPrefix, typedText, searchQuery);
 
             // Wait for suggestions to appear
             await Task.Delay(2000);
