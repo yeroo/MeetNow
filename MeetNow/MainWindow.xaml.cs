@@ -321,32 +321,8 @@ namespace MeetNow
                 MessageSummaryWindow.AddMessage(message);
                 MessageHistory.Add(message);
 
-                if (AutopilotOverlay.IsActive)
-                {
-                    switch (message.Urgency)
-                    {
-                        case MessageUrgency.Urgent:
-                            TeamsMessagePopupWindow.ShowUrgentMessage(message);
-                            if (message.IsDirectChat)
-                            {
-                                var settings = MeetNowSettings.Instance;
-                                if (settings.SimulateTypingInAutopilot
-                                    && TeamsOperationQueue.TryClaimSimulateTyping(message.Sender))
-                                {
-                                    TeamsOperationQueue.Enqueue($"Simulate typing to {message.Sender}",
-                                        () => TeamsStatusManager.SimulateTypingAsync(message.Sender));
-                                }
-                                if (settings.AutoReplyHiInAutopilot)
-                                    AutopilotOverlay.TrackUrgentMessage(message.Sender);
-                                ForwardUrgentIfEnabled(message);
-                            }
-                            break;
-                        case MessageUrgency.Normal:
-                            TeamsMessagePopupWindow.PlayNormalSound();
-                            break;
-                        // Low: no sound, no popup
-                    }
-                }
+                // Trigger autopilot cycle on new message (LLM decides what to do)
+                AutopilotAgent.TriggerCycle();
             }
             catch (Exception ex)
             {
@@ -354,19 +330,6 @@ namespace MeetNow
             }
         }
 
-        private void ForwardUrgentIfEnabled(TeamsMessage message)
-        {
-            var settings = MeetNowSettings.Instance;
-            if (!settings.ForwardUrgentInAutopilot || string.IsNullOrWhiteSpace(settings.ForwardToEmail))
-                return;
-
-            var forwardText = $"{message.Sender} (Urgent): {message.Content}";
-            Log.Information("Forwarding urgent message to {Email}: {Preview}",
-                settings.ForwardToEmail, forwardText.Length > 80 ? forwardText[..80] : forwardText);
-
-            TeamsOperationQueue.Enqueue($"Forward to {settings.ForwardToEmail}",
-                () => TeamsStatusManager.SendMessageAsync(settings.ForwardToEmail, forwardText));
-        }
 
         protected override void OnClosed(EventArgs e)
         {
