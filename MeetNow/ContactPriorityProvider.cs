@@ -1,6 +1,7 @@
 using MeetNow.Models;
 using Serilog;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -27,19 +28,20 @@ namespace MeetNow
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "MeetNow", "contact_priorities.json");
 
-        private static Dictionary<string, ContactPriority>? _cache;
+        private static readonly Lazy<ConcurrentDictionary<string, ContactPriority>> _cache = new(LoadFromDisk);
 
-        private static Dictionary<string, ContactPriority> Load()
+        private static ConcurrentDictionary<string, ContactPriority> Load() => _cache.Value;
+
+        private static ConcurrentDictionary<string, ContactPriority> LoadFromDisk()
         {
-            if (_cache != null) return _cache;
-
             try
             {
                 if (File.Exists(FilePath))
                 {
                     var json = File.ReadAllText(FilePath);
-                    _cache = JsonSerializer.Deserialize<Dictionary<string, ContactPriority>>(json)
-                             ?? new Dictionary<string, ContactPriority>(StringComparer.OrdinalIgnoreCase);
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, ContactPriority>>(json);
+                    if (dict != null)
+                        return new ConcurrentDictionary<string, ContactPriority>(dict, StringComparer.OrdinalIgnoreCase);
                 }
             }
             catch (Exception ex)
@@ -47,8 +49,7 @@ namespace MeetNow
                 Log.Warning(ex, "Failed to load contact priorities");
             }
 
-            _cache ??= new Dictionary<string, ContactPriority>(StringComparer.OrdinalIgnoreCase);
-            return _cache;
+            return new ConcurrentDictionary<string, ContactPriority>(StringComparer.OrdinalIgnoreCase);
         }
 
         private static void Save()
@@ -59,7 +60,7 @@ namespace MeetNow
                 if (!Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
 
-                var json = JsonSerializer.Serialize(_cache, new JsonSerializerOptions { WriteIndented = true });
+                var json = JsonSerializer.Serialize(_cache.Value, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(FilePath, json);
             }
             catch (Exception ex)
@@ -87,7 +88,7 @@ namespace MeetNow
             var dict = Load();
 
             if (priority == ContactPriority.Default)
-                dict.Remove(sender);
+                dict.TryRemove(sender, out _);
             else
                 dict[sender] = priority;
 
@@ -108,6 +109,15 @@ namespace MeetNow
                     result.Add(kvp.Key);
             }
             return result;
+        }
+
+        /// <summary>
+        /// Returns all contacts with non-Default priority overrides.
+        /// </summary>
+        public static IReadOnlyDictionary<string, ContactPriority> GetAllOverrides()
+        {
+            var dict = Load();
+            return dict;
         }
 
         /// <summary>
