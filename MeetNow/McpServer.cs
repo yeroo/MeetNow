@@ -645,12 +645,77 @@ namespace MeetNow
             };
         }
 
-        // --- Action tool stubs (implemented in Task 6) ---
+        // --- Action tool implementations ---
 
-        private static object ToolSetAvailability(JsonElement? args) => throw new NotImplementedException();
-        private static object ToolSendMessage(JsonElement? args) => throw new NotImplementedException();
-        private static object ToolSimulateTyping(JsonElement? args) => throw new NotImplementedException();
-        private static object ToolSetContactPriority(JsonElement? args) => throw new NotImplementedException();
+        private static object ToolSetAvailability(JsonElement? args)
+        {
+            var statusStr = args?.TryGetProperty("status", out var s) == true ? s.GetString() : null;
+            if (string.IsNullOrEmpty(statusStr))
+                throw new ArgumentException("Missing required parameter: status");
+
+            if (!Enum.TryParse<TeamsStatusManager.TeamsStatus>(statusStr, true, out var status))
+                throw new ArgumentException($"Invalid status: {statusStr}. Use Available, Busy, Away, DoNotDisturb, or BeRightBack.");
+
+            var description = $"Set Teams {status}";
+            TeamsOperationQueue.Enqueue(description,
+                () => TeamsStatusManager.SetStatusAsync(status));
+
+            return new { queued = true, description };
+        }
+
+        private static object ToolSendMessage(JsonElement? args)
+        {
+            var recipient = args?.TryGetProperty("recipient", out var r) == true ? r.GetString() : null;
+            var message = args?.TryGetProperty("message", out var m) == true ? m.GetString() : null;
+
+            if (string.IsNullOrEmpty(recipient))
+                throw new ArgumentException("Missing required parameter: recipient");
+            if (string.IsNullOrEmpty(message))
+                throw new ArgumentException("Missing required parameter: message");
+
+            var description = $"Send '{message}' to {recipient}";
+            TeamsOperationQueue.Enqueue(description,
+                () => TeamsStatusManager.SendMessageAsync(recipient, message));
+
+            return new { queued = true, description };
+        }
+
+        private static object ToolSimulateTyping(JsonElement? args)
+        {
+            var recipient = args?.TryGetProperty("recipient", out var r) == true ? r.GetString() : null;
+
+            if (string.IsNullOrEmpty(recipient))
+                throw new ArgumentException("Missing required parameter: recipient");
+
+            if (!TeamsOperationQueue.TryClaimSimulateTyping(recipient))
+            {
+                return new { skipped = true, reason = $"Cooldown active for {recipient}" };
+            }
+
+            var description = $"Simulate typing to {recipient}";
+            TeamsOperationQueue.Enqueue(description,
+                () => TeamsStatusManager.SimulateTypingAsync(recipient));
+
+            return new { queued = true, description };
+        }
+
+        private static object ToolSetContactPriority(JsonElement? args)
+        {
+            var sender = args?.TryGetProperty("sender", out var s) == true ? s.GetString() : null;
+            var priorityStr = args?.TryGetProperty("priority", out var p) == true ? p.GetString() : null;
+
+            if (string.IsNullOrEmpty(sender))
+                throw new ArgumentException("Missing required parameter: sender");
+            if (string.IsNullOrEmpty(priorityStr))
+                throw new ArgumentException("Missing required parameter: priority");
+
+            if (!Enum.TryParse<ContactPriorityProvider.ContactPriority>(priorityStr, true, out var priority))
+                throw new ArgumentException($"Invalid priority: {priorityStr}. Use Urgent, Normal, Low, or Default.");
+
+            ContactPriorityProvider.SetPriority(sender, priority);
+
+            return new { success = true };
+        }
 
         private static async Task SendJsonRpcResult(HttpListenerContext context, JsonElement id, object? result)
         {
