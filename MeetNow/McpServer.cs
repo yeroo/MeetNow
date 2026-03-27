@@ -194,7 +194,7 @@ namespace MeetNow
             context.Response.StatusCode = 200;
             context.Response.SendChunked = true;
 
-            var writer = new StreamWriter(context.Response.OutputStream, Encoding.UTF8) { AutoFlush = true };
+            var writer = new StreamWriter(context.Response.OutputStream, new UTF8Encoding(false)) { AutoFlush = true };
             var connCts = CancellationTokenSource.CreateLinkedTokenSource(_cts!.Token);
             var conn = new SseConnection(sessionId, context.Response, writer, connCts);
             _connections[sessionId] = conn;
