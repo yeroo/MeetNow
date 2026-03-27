@@ -34,6 +34,9 @@ namespace MeetNow
         public bool ShowTeamsWebView { get; set; } = true;
         public bool LogAllWebViewTraffic { get; set; } = true;
 
+        // MCP server
+        public int McpPort { get; set; } = 27182;
+
         public static MeetNowSettings Instance => _instance ??= Load();
 
         private static MeetNowSettings Load()
