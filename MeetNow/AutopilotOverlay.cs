@@ -1,10 +1,6 @@
 using Serilog;
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -17,14 +13,6 @@ namespace MeetNow
     {
         private static BorderOverlayWindow? _borderWindow;
         private static ButtonOverlayWindow? _buttonWindow;
-        private static Timer? _autoOffTimer;
-
-        // Track urgent message counts per sender and pending auto-replies
-        private static readonly ConcurrentDictionary<string, int> _urgentMessageCounts = new();
-
-        private record PendingReply(CancellationTokenSource Cts, DateTime ScheduledTime);
-        private static readonly ConcurrentDictionary<string, PendingReply> _pendingReplies = new();
-
 
         public static bool IsActive => _borderWindow != null;
 
@@ -50,22 +38,11 @@ namespace MeetNow
                 _buttonWindow.Show();
             });
 
-            StartAutoOffTimer();
-            Log.Information("Autopilot mode enabled");
-            TeamsOperationQueue.Enqueue("Set Teams Busy",
-                () => TeamsStatusManager.SetStatusAsync(TeamsStatusManager.TeamsStatus.Busy));
+            Log.Information("Autopilot mode enabled (UI overlay shown)");
         }
 
         public static void Disable()
         {
-            // Cancel all pending auto-replies
-            foreach (var reply in _pendingReplies.Values)
-            {
-                reply.Cts.Cancel();
-            }
-            _pendingReplies.Clear();
-            _urgentMessageCounts.Clear();
-
             Application.Current.Dispatcher.Invoke(() =>
             {
                 _borderWindow?.Close();
@@ -74,90 +51,7 @@ namespace MeetNow
                 _buttonWindow = null;
             });
 
-            _autoOffTimer?.Dispose();
-            _autoOffTimer = null;
-
-            TeamsOperationQueue.ClearQueue();
-            TeamsOperationQueue.ResetCooldowns();
-            Log.Information("Autopilot mode disabled, cancelled all pending auto-replies, queue cleared");
-            TeamsOperationQueue.Enqueue("Set Teams Available",
-                () => TeamsStatusManager.SetStatusAsync(TeamsStatusManager.TeamsStatus.Available));
-        }
-
-        /// <summary>
-        /// Track an urgent 1:1 message. If sender exceeds threshold, schedule auto-reply.
-        /// </summary>
-        public static void TrackUrgentMessage(string sender)
-        {
-            if (!IsActive) return;
-
-            var settings = MeetNowSettings.Instance;
-            var count = _urgentMessageCounts.AddOrUpdate(sender, 1, (_, c) => c + 1);
-            Log.Information("Autopilot: urgent message #{Count} from {Sender}", count, sender);
-
-            if (count >= settings.AutoReplyMessageThreshold && !_pendingReplies.ContainsKey(sender))
-            {
-                var delay = TimeSpan.FromMinutes(settings.AutoReplyDelayMinutes);
-                Log.Information("Autopilot: scheduling auto-reply to {Sender} in {Delay} minutes",
-                    sender, delay.TotalMinutes);
-
-                var cts = new CancellationTokenSource();
-                _pendingReplies[sender] = new PendingReply(cts, DateTime.Now + delay);
-
-                _ = ScheduleAutoReplyAsync(sender, delay, cts.Token);
-            }
-        }
-
-        public static Dictionary<string, DateTime> GetPendingAutoReplies()
-        {
-            var result = new Dictionary<string, DateTime>();
-            foreach (var kvp in _pendingReplies)
-                result[kvp.Key] = kvp.Value.ScheduledTime;
-            return result;
-        }
-
-        private static async Task ScheduleAutoReplyAsync(string sender, TimeSpan delay, CancellationToken ct)
-        {
-            try
-            {
-                await Task.Delay(delay, ct);
-
-                if (ct.IsCancellationRequested || !IsActive)
-                {
-                    Log.Information("Autopilot: auto-reply to {Sender} cancelled (autopilot disabled)", sender);
-                    return;
-                }
-
-                Log.Information("Autopilot: queuing auto-reply 'Hi' to {Sender}", sender);
-                TeamsOperationQueue.Enqueue($"Auto-reply Hi to {sender}",
-                    () => TeamsStatusManager.SendMessageAsync(sender, "Hi"));
-
-                _pendingReplies.TryRemove(sender, out _);
-            }
-            catch (TaskCanceledException)
-            {
-                Log.Information("Autopilot: auto-reply to {Sender} cancelled", sender);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Autopilot: error in auto-reply to {Sender}", sender);
-            }
-        }
-
-        private static void StartAutoOffTimer()
-        {
-            _autoOffTimer?.Dispose();
-            _autoOffTimer = new Timer(_ =>
-            {
-                if (!IsActive) return;
-
-                if (TimeSpan.TryParse(MeetNowSettings.Instance.AutopilotOffTime, out var offTime)
-                    && DateTime.Now.TimeOfDay >= offTime)
-                {
-                    Log.Information("Autopilot auto-off: reached {Time}, disabling", offTime);
-                    Application.Current.Dispatcher.Invoke(Disable);
-                }
-            }, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+            Log.Information("Autopilot mode disabled (UI overlay hidden)");
         }
 
         /// <summary>
