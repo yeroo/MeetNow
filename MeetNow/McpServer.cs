@@ -360,16 +360,297 @@ namespace MeetNow
             }
         }
 
-        // DispatchTool and tool definitions will be added in Tasks 5-7
         private static object DispatchTool(string toolName, JsonElement? args)
         {
-            throw new ArgumentException($"Unknown tool: {toolName}");
+            return toolName switch
+            {
+                "get_messages" => ToolGetMessages(args),
+                "get_meetings" => ToolGetMeetings(args),
+                "get_contacts" => ToolGetContacts(args),
+                "get_favorites" => ToolGetFavorites(),
+                "get_contact_priorities" => ToolGetContactPriorities(args),
+                "get_status" => ToolGetStatus(),
+                "set_availability" => ToolSetAvailability(args),
+                "send_message" => ToolSendMessage(args),
+                "simulate_typing" => ToolSimulateTyping(args),
+                "set_contact_priority" => ToolSetContactPriority(args),
+                _ => throw new ArgumentException($"Unknown tool: {toolName}")
+            };
         }
 
         private static object[] GetToolDefinitions()
         {
-            return Array.Empty<object>();
+            return new object[]
+            {
+                new
+                {
+                    name = "get_messages",
+                    description = "Get recent Teams messages, optionally filtered by sender name and/or urgency level.",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["sender"] = new { type = "string", description = "Filter by sender display name (substring match)" },
+                            ["urgency"] = new { type = "string", description = "Filter by urgency level", @enum = new[] { "Urgent", "Normal", "Low" } },
+                            ["minutes"] = new { type = "integer", description = "How many minutes back to look (default 60)", @default = 60 }
+                        }
+                    }
+                },
+                new
+                {
+                    name = "get_meetings",
+                    description = "Get calendar meetings for a given date (defaults to today).",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["date"] = new { type = "string", description = "Date in YYYY-MM-DD format (default: today)" }
+                        }
+                    }
+                },
+                new
+                {
+                    name = "get_contacts",
+                    description = "Search contacts by name or get all/pinned contacts from the local contact database.",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["query"] = new { type = "string", description = "Search by display name (substring match)" },
+                            ["pinned_only"] = new { type = "boolean", description = "Return only pinned/favorite contacts" }
+                        }
+                    }
+                },
+                new
+                {
+                    name = "get_favorites",
+                    description = "Get the list of favorite contact names from Teams.",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>()
+                    }
+                },
+                new
+                {
+                    name = "get_contact_priorities",
+                    description = "Get contact priority overrides, optionally filtered by priority level.",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["priority"] = new { type = "string", description = "Filter by priority level", @enum = new[] { "Urgent", "Normal", "Low", "Default" } }
+                        }
+                    }
+                },
+                new
+                {
+                    name = "get_status",
+                    description = "Get current MeetNow status: autopilot state, pending auto-replies, and operation queue.",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>()
+                    }
+                },
+                new
+                {
+                    name = "set_availability",
+                    description = "Set Teams availability status (Available, Busy, Away, DoNotDisturb, BeRightBack).",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["status"] = new { type = "string", description = "The availability status to set", @enum = new[] { "Available", "Busy", "Away", "DoNotDisturb", "BeRightBack" } }
+                        },
+                        required = new[] { "status" }
+                    }
+                },
+                new
+                {
+                    name = "send_message",
+                    description = "Send a Teams chat message to a recipient.",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["recipient"] = new { type = "string", description = "Recipient display name or email" },
+                            ["message"] = new { type = "string", description = "Message text to send" }
+                        },
+                        required = new[] { "recipient", "message" }
+                    }
+                },
+                new
+                {
+                    name = "simulate_typing",
+                    description = "Simulate typing indicator in a Teams chat with a recipient.",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["recipient"] = new { type = "string", description = "Recipient display name or email" }
+                        },
+                        required = new[] { "recipient" }
+                    }
+                },
+                new
+                {
+                    name = "set_contact_priority",
+                    description = "Set the notification priority override for a contact.",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["sender"] = new { type = "string", description = "Contact display name (substring match)" },
+                            ["priority"] = new { type = "string", description = "Priority level to assign", @enum = new[] { "Urgent", "Normal", "Low", "Default" } }
+                        },
+                        required = new[] { "sender", "priority" }
+                    }
+                }
+            };
         }
+
+        // --- Read-only tool implementations ---
+
+        private static object ToolGetMessages(JsonElement? args)
+        {
+            var minutes = args?.TryGetProperty("minutes", out var m) == true ? m.GetInt32() : 60;
+            var sender = args?.TryGetProperty("sender", out var s) == true ? s.GetString() : null;
+            MessageUrgency? urgency = null;
+            if (args?.TryGetProperty("urgency", out var u) == true)
+            {
+                if (Enum.TryParse<MessageUrgency>(u.GetString(), true, out var parsed))
+                    urgency = parsed;
+                else
+                    throw new ArgumentException($"Invalid urgency: {u.GetString()}. Use Urgent, Normal, or Low.");
+            }
+            var messages = MessageHistory.GetRecent(minutes, sender, urgency);
+            return messages.Select(msg => new
+            {
+                sender = msg.Sender,
+                content = msg.Content,
+                timestamp = msg.Timestamp.ToString("o"),
+                threadType = msg.ThreadType,
+                isMention = msg.IsMention,
+                urgency = msg.Urgency.ToString(),
+                urgencyReason = msg.UrgencyReason
+            }).ToArray();
+        }
+
+        private static string MapResponseStatus(ResponseStatus status)
+        {
+            return status switch
+            {
+                ResponseStatus.olResponseNone => "None",
+                ResponseStatus.olResponseOrganized => "Organized",
+                ResponseStatus.olResponseTentative => "Tentative",
+                ResponseStatus.olResponseAccepted => "Accepted",
+                ResponseStatus.olResponseDeclined => "Declined",
+                ResponseStatus.olResponseNotResponded => "NotResponded",
+                _ => status.ToString()
+            };
+        }
+
+        private static object ToolGetMeetings(JsonElement? args)
+        {
+            DateTime date = DateTime.Today;
+            if (args?.TryGetProperty("date", out var d) == true)
+            {
+                if (!DateTime.TryParse(d.GetString(), out date))
+                    throw new ArgumentException($"Invalid date format: {d.GetString()}. Use YYYY-MM-DD.");
+            }
+            var aggregator = new MeetingDataAggregator();
+            var meetings = aggregator.GetMeetings(date, MeetNowSettings.Instance.OutlookSource);
+            return meetings.Select(mtg => new
+            {
+                subject = mtg.Subject,
+                start = mtg.Start.ToString("o"),
+                end = mtg.End.ToString("o"),
+                organizer = mtg.Organizer,
+                location = mtg.Location,
+                teamsUrl = mtg.TeamsUrl,
+                responseStatus = MapResponseStatus(mtg.ResponseStatus),
+                isRequired = mtg.IsRequired,
+                recurrent = mtg.Recurrent,
+                requiredAttendees = mtg.RequiredAttendees,
+                optionalAttendees = mtg.OptionalAttendees
+            }).ToArray();
+        }
+
+        private static object ToolGetContacts(JsonElement? args)
+        {
+            var query = args?.TryGetProperty("query", out var q) == true ? q.GetString() : null;
+            var pinnedOnly = args?.TryGetProperty("pinned_only", out var po) == true && po.GetBoolean();
+            List<Contact> contacts;
+            if (pinnedOnly)
+                contacts = ContactDatabase.GetPinned();
+            else if (!string.IsNullOrWhiteSpace(query))
+                contacts = ContactDatabase.GetByName(query);
+            else
+                contacts = ContactDatabase.GetAll();
+            return contacts.Select(c => new
+            {
+                teamsUserId = c.TeamsUserId,
+                displayName = c.DisplayName,
+                email = c.Email,
+                jobTitle = c.JobTitle,
+                department = c.Department,
+                phone = c.Phone,
+                isPinned = c.IsPinned,
+                lastSeen = c.LastSeenTimestamp.ToString("o")
+            }).ToArray();
+        }
+
+        private static object ToolGetFavorites()
+        {
+            var favorites = FavoriteContactsProvider.GetFavoriteContactNames();
+            return favorites.OrderBy(n => n).ToArray();
+        }
+
+        private static object ToolGetContactPriorities(JsonElement? args)
+        {
+            if (args?.TryGetProperty("priority", out var p) == true)
+            {
+                if (!Enum.TryParse<ContactPriorityProvider.ContactPriority>(p.GetString(), true, out var priority))
+                    throw new ArgumentException($"Invalid priority: {p.GetString()}. Use Urgent, Normal, Low, or Default.");
+                return ContactPriorityProvider.GetContactsByPriority(priority)
+                    .Select(s => new { sender = s, priority = priority.ToString() })
+                    .ToArray();
+            }
+            var all = ContactPriorityProvider.GetAllOverrides();
+            return all.Select(kvp => new { sender = kvp.Key, priority = kvp.Value.ToString() }).ToArray();
+        }
+
+        private static object ToolGetStatus()
+        {
+            var pending = TeamsOperationQueue.PendingSnapshot;
+            var current = TeamsOperationQueue.Current;
+            return new
+            {
+                autopilotActive = AutopilotOverlay.IsActive,
+                pendingAutoReplies = AutopilotOverlay.GetPendingAutoReplies()
+                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToString("o")),
+                queueCurrent = current?.Description,
+                queueCurrentStep = TeamsOperationQueue.CurrentStep,
+                queuePending = pending.Select(e => e.Description).ToArray(),
+                isExecuting = TeamsOperationQueue.IsExecuting
+            };
+        }
+
+        // --- Action tool stubs (implemented in Task 6) ---
+
+        private static object ToolSetAvailability(JsonElement? args) => throw new NotImplementedException();
+        private static object ToolSendMessage(JsonElement? args) => throw new NotImplementedException();
+        private static object ToolSimulateTyping(JsonElement? args) => throw new NotImplementedException();
+        private static object ToolSetContactPriority(JsonElement? args) => throw new NotImplementedException();
 
         private static async Task SendJsonRpcResult(HttpListenerContext context, JsonElement id, object? result)
         {
