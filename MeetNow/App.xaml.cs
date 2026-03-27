@@ -49,6 +49,7 @@ namespace MeetNow
 
             ScreenLockPrevention.Start();
             McpServer.Start();
+            AutopilotAgent.Start();
 
 #if !DEBUG
             if (SelfInstallIfNeeded())
@@ -61,6 +62,7 @@ namespace MeetNow
 
         protected override void OnExit(ExitEventArgs e)
         {
+            AutopilotAgent.Stop();
             McpServer.Stop();
             ScreenLockPrevention.Stop();
             base.OnExit(e);
