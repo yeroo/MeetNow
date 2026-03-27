@@ -48,6 +48,7 @@ namespace MeetNow
             Log.Information("MeetNow Started (build {Build})", BuildInfo.Number);
 
             ScreenLockPrevention.Start();
+            McpServer.Start();
 
 #if !DEBUG
             if (SelfInstallIfNeeded())
@@ -56,6 +57,13 @@ namespace MeetNow
                 return;
             }
 #endif
+        }
+
+        protected override void OnExit(ExitEventArgs e)
+        {
+            McpServer.Stop();
+            ScreenLockPrevention.Stop();
+            base.OnExit(e);
         }
 
         /// <summary>
