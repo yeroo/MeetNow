@@ -47,6 +47,8 @@ namespace MeetNow
             Log.Information("-----------------------");
             Log.Information("MeetNow Started (build {Build})", BuildInfo.Number);
 
+            ScreenLockPrevention.Start();
+
 #if !DEBUG
             if (SelfInstallIfNeeded())
             {

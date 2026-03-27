@@ -18,37 +18,6 @@ namespace MeetNow
         private static BorderOverlayWindow? _borderWindow;
         private static ButtonOverlayWindow? _buttonWindow;
         private static Timer? _autoOffTimer;
-        private static Timer? _keepAliveTimer;
-
-        // SendInput P/Invoke for hardware-level mouse movement (bypasses IT lock screen policies)
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct INPUT
-        {
-            public uint type;
-            public MOUSEINPUT mi;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct MOUSEINPUT
-        {
-            public int dx, dy;
-            public uint mouseData, dwFlags, time;
-            public IntPtr dwExtraInfo;
-        }
-
-        private const uint INPUT_MOUSE = 0;
-        private const uint MOUSEEVENTF_MOVE = 0x0001;
-
-        // Also use SetThreadExecutionState as a secondary measure
-        [DllImport("kernel32.dll")]
-        private static extern uint SetThreadExecutionState(uint esFlags);
-
-        private const uint ES_CONTINUOUS = 0x80000000;
-        private const uint ES_SYSTEM_REQUIRED = 0x00000001;
-        private const uint ES_DISPLAY_REQUIRED = 0x00000002;
 
         // Track urgent message counts per sender and pending auto-replies
         private static readonly ConcurrentDictionary<string, int> _urgentMessageCounts = new();
@@ -82,8 +51,7 @@ namespace MeetNow
             });
 
             StartAutoOffTimer();
-            StartKeepAlive();
-            Log.Information("Autopilot mode enabled (screen lock prevention active)");
+            Log.Information("Autopilot mode enabled");
             TeamsOperationQueue.Enqueue("Set Teams Busy",
                 () => TeamsStatusManager.SetStatusAsync(TeamsStatusManager.TeamsStatus.Busy));
         }
@@ -109,60 +77,11 @@ namespace MeetNow
             _autoOffTimer?.Dispose();
             _autoOffTimer = null;
 
-            StopKeepAlive();
-
             TeamsOperationQueue.ClearQueue();
             TeamsOperationQueue.ResetCooldowns();
             Log.Information("Autopilot mode disabled, cancelled all pending auto-replies, queue cleared");
             TeamsOperationQueue.Enqueue("Set Teams Available",
                 () => TeamsStatusManager.SetStatusAsync(TeamsStatusManager.TeamsStatus.Available));
-        }
-
-        private static void StartKeepAlive()
-        {
-            // Set execution state to prevent sleep
-            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-
-            // Move mouse by 1px every 60s to simulate real user activity
-            _keepAliveTimer = new Timer(_ =>
-            {
-                try
-                {
-                    // Refresh execution state each tick
-                    SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
-
-                    // SendInput mouse move: 1px right, then 1px left
-                    var inputs = new INPUT[2];
-                    inputs[0].type = INPUT_MOUSE;
-                    inputs[0].mi.dx = 1;
-                    inputs[0].mi.dy = 0;
-                    inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE;
-
-                    inputs[1].type = INPUT_MOUSE;
-                    inputs[1].mi.dx = -1;
-                    inputs[1].mi.dy = 0;
-                    inputs[1].mi.dwFlags = MOUSEEVENTF_MOVE;
-
-                    SendInput(2, inputs, Marshal.SizeOf<INPUT>());
-                }
-                catch (Exception ex)
-                {
-                    Log.Debug(ex, "KeepAlive: mouse move failed");
-                }
-            }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60));
-
-            Log.Information("KeepAlive: started (SendInput mouse + SetThreadExecutionState)");
-        }
-
-        private static void StopKeepAlive()
-        {
-            _keepAliveTimer?.Dispose();
-            _keepAliveTimer = null;
-
-            // Clear execution state
-            SetThreadExecutionState(ES_CONTINUOUS);
-
-            Log.Information("KeepAlive: stopped");
         }
 
         /// <summary>
