@@ -361,6 +361,11 @@ namespace MeetNow
             AutopilotOverlay.Toggle();
         }
 
+        private void MenuItem_AutopilotChatClick(object sender, RoutedEventArgs e)
+        {
+            AutopilotChatWindow.ShowOrActivate();
+        }
+
         private void MenuItem_ClearQueueClick(object sender, RoutedEventArgs e)
         {
             TeamsOperationQueue.ClearQueue();
