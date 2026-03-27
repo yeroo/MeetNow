@@ -18,6 +18,8 @@
                     <MenuItem Header="Autopilot" Click="MenuItem_AutopilotClick"/>
                     <MenuItem Header="Clear Queue" Click="MenuItem_ClearQueueClick"/>
                     <MenuItem Header="Settings" Click="MenuItem_SettingsClick"/>
+                    <MenuItem Header="Debug WebView" Click="MenuItem_DebugWebViewClick"/>
+                    <MenuItem Header="Find Person" Click="MenuItem_FindPersonClick"/>
                     <Separator/>
                     <MenuItem Header="Exit" Click="MenuItem_ExitAppClick"/>
                 </ContextMenu>

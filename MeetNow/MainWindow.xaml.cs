@@ -35,6 +35,9 @@ namespace MeetNow
         private Timer _timer = null!;
         private TeamsMessageMonitor? _teamsMonitor;
         private NotificationListenerMonitor? _notificationMonitor;
+        private DebugViewerWindow? _debugViewerWindow;
+        private MeetingDataAggregator? _meetingAggregator;
+        private FindPersonWindow? _findPersonWindow;
 
         internal MainWindowModel Model
         {
@@ -48,10 +51,17 @@ namespace MeetNow
             Model = new MainWindowModel();
             JobManager.Initialize();
             InitializeComponent();
-            CheckOutlookRunning();
+            if (MeetNowSettings.Instance.OutlookSource != "WebView")
+                CheckOutlookRunning();
             SetupTimer();
             StartTeamsMonitor();
             QueueOverlay.Initialize();
+            if (MeetNowSettings.Instance.ShowTeamsWebView
+                || MeetNowSettings.Instance.OutlookSource == "WebView")
+            {
+                InitializeWebViewManager();
+            }
+            _meetingAggregator = new MeetingDataAggregator();
             SystemEvents.PowerModeChanged += OnPowerChange;
 #if DEBUG
             var contextMenu = tb.ContextMenu;
@@ -104,15 +114,75 @@ namespace MeetNow
             // MenuItem: test typing simulation
             var test8MenuItem = new MenuItem();
             test8MenuItem.Header = "Test: Simulate Typing";
-            test8MenuItem.Click += (_, _) => TeamsOperationQueue.Enqueue("Simulate typing to Boris Kudriashov",
-                () => TeamsStatusManager.SimulateTypingAsync("Boris Kudriashov"));
+            test8MenuItem.Click += (_, _) =>
+            {
+                var target = MeetNowSettings.Instance.ForwardToEmail ?? "test";
+                TeamsOperationQueue.Enqueue($"Simulate typing to {target}",
+                    () => TeamsStatusManager.SimulateTypingAsync(target));
+            };
+
+            var test9MenuItem = new MenuItem();
+            test9MenuItem.Header = "Test: Send Message";
+            test9MenuItem.Click += (_, _) =>
+            {
+                var target = MeetNowSettings.Instance.ForwardToEmail ?? "test";
+                TeamsOperationQueue.Enqueue($"Send test message to {target}",
+                    () => TeamsStatusManager.SendMessageAsync(target, "Test message from MeetNow"));
+            };
 
             contextMenu.Items.Insert(5, test6MenuItem);
             contextMenu.Items.Insert(6, test7MenuItem);
             contextMenu.Items.Insert(7, test8MenuItem);
-            contextMenu.Items.Insert(8, separator);
+            contextMenu.Items.Insert(8, test9MenuItem);
+            contextMenu.Items.Insert(9, separator);
 #endif
         }
+        private async void InitializeWebViewManager()
+        {
+            try
+            {
+                await WebViewManager.Instance.InitializeAsync();
+
+                // Start MessageMonitorTask and WebViewMessageDetector on the persistent instance
+                var persistent = WebViewManager.Instance.PersistentInstance;
+                if (persistent != null)
+                {
+                    // Wait for Teams to load, then switch to Chat tab
+                    await Task.Delay(5000);
+
+                    // Switch to Chat tab via CDP Ctrl+Shift+3
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                        () => persistent.SendShortcutAsync("3", ctrl: true, shift: true)).Task.Unwrap();
+                    Log.Information("MessageMonitor: sent Ctrl+Shift+3 to switch to Chat tab");
+                    await Task.Delay(3000); // Wait for Chat tab to render
+
+                    await Tasks.MessageMonitorTask.StartAsync(persistent);
+                    Tasks.WebViewMessageDetector.StartListening(persistent);
+                }
+
+                // CalendarCollectorTask is now a persistent listener on its own
+                // dedicated WebViewInstance — started automatically by WebViewManager
+                // Trigger a meeting refresh when calendar data becomes available
+                Tasks.CalendarCollectorTask.MeetingsUpdated += () =>
+                    Dispatcher.Invoke(() => RefreshOutlookWithRetry(false, 1));
+
+                // Schedule PeopleEnricherTask every 30 min
+                WebViewManager.Instance.ScheduleTask("PeopleEnricher",
+                    TimeSpan.FromMinutes(30),
+                    async _ =>
+                    {
+                        await WebViewManager.Instance.RequestTask("PeopleEnricher",
+                            Tasks.PeopleEnricherTask.RunAsync);
+                    });
+
+                Log.Information("WebViewManager initialized with scheduled tasks");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to initialize WebViewManager");
+            }
+        }
+
         private void OnPowerChange(object sender, PowerModeChangedEventArgs e)
         {
             switch (e.Mode)
@@ -218,6 +288,7 @@ namespace MeetNow
 
                 _teamsMonitor = new TeamsMessageMonitor(username);
                 _teamsMonitor.NewMessageDetected += OnTeamsMessageDetected;
+                Tasks.WebViewMessageDetector.NewMessageDetected += OnTeamsMessageDetected;
                 if (_teamsMonitor.Start())
                 {
                     Log.Information("Teams monitor: LevelDB polling active as supplement");
@@ -299,6 +370,10 @@ namespace MeetNow
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
+            Tasks.WebViewMessageDetector.StopListening();
+            Tasks.MessageMonitorTask.Stop();
+            WebViewManager.Instance.Shutdown();
+            ContactDatabase.FlushAndDispose();
             _timer.Dispose();
             _notificationMonitor?.Dispose();
             _teamsMonitor?.Dispose();
@@ -331,6 +406,36 @@ namespace MeetNow
         {
             Close();
         }
+
+        private void MenuItem_DebugWebViewClick(object sender, RoutedEventArgs e)
+        {
+            if (_debugViewerWindow == null)
+            {
+                _debugViewerWindow = new DebugViewerWindow();
+            }
+            else
+            {
+                _debugViewerWindow.RefreshInstances();
+            }
+
+            if (_debugViewerWindow.IsVisible)
+                _debugViewerWindow.Hide();
+            else
+                _debugViewerWindow.Show();
+        }
+
+        private void MenuItem_FindPersonClick(object sender, RoutedEventArgs e)
+        {
+            if (_findPersonWindow == null)
+            {
+                _findPersonWindow = new FindPersonWindow();
+            }
+
+            if (_findPersonWindow.IsVisible)
+                _findPersonWindow.Hide();
+            else
+                _findPersonWindow.Show();
+        }
         private bool RefreshOutlookWithRetry(bool debug = false, int retryCount = 3)
         {
             int retries = 0;
@@ -350,42 +455,24 @@ namespace MeetNow
                 var now = DateTime.Now;
                 string username = Dispatcher.Invoke(() => Model.Username) ?? Environment.UserName;
 
-                var source = MeetNowSettings.Instance.OutlookSource;
                 TeamsMeeting[] meetings;
-
-                if (source == "Classic")
+                if (_meetingAggregator != null)
                 {
-                    bool isRunning = Process.GetProcessesByName("OUTLOOK").Length > 0;
-                    if (!isRunning)
-                    {
-                        Log.Warning("Classic Outlook selected but not running");
-                        return false;
-                    }
-                    try
-                    {
-                        (meetings, username) = OutlookHelper.GetTeamsMeetings(now, debug);
-                        Log.Information("Classic Outlook COM: {Count} meetings", meetings.Length);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warning(ex, "Outlook COM not available");
-                        return false;
-                    }
+                    meetings = _meetingAggregator.GetMeetings(
+                        now, MeetNowSettings.Instance.OutlookSource, debug);
                 }
                 else
                 {
-                    bool isRunning = Process.GetProcessesByName("olk").Length > 0;
-                    try
-                    {
+                    // Fallback: direct source access (aggregator not yet initialized)
+                    var source = MeetNowSettings.Instance.OutlookSource;
+                    if (source == "WebView")
+                        meetings = Tasks.CalendarCollectorTask.LastCollectedMeetings;
+                    else if (source == "New")
                         meetings = OutlookCacheReader.GetTodaysMeetings(now);
-                        Log.Information("New Outlook cache: {Count} meetings (olk running={Running})", meetings.Length, isRunning);
-                        if (!isRunning && meetings.Length > 0)
-                            Log.Warning("New Outlook not running — cache may be stale");
-                    }
-                    catch (Exception ex)
+                    else
                     {
-                        Log.Error(ex, "Error reading Outlook cache");
-                        return false;
+                        var (m, _) = OutlookHelper.GetTeamsMeetings(now, debug);
+                        meetings = m ?? Array.Empty<TeamsMeeting>();
                     }
                 }
 
@@ -406,9 +493,12 @@ namespace MeetNow
 
                     Dictionary<DateTime, List<TeamsMeeting>> aggregatedEvents = new();
 
+                    var isWebViewSource = MeetNowSettings.Instance.OutlookSource == "WebView";
                     foreach (var meeting in meetings)
                     {
-                        if (!string.IsNullOrEmpty(meeting.TeamsUrl))
+                        // WebView source: show all meetings (Teams URL not available from DOM)
+                        // Other sources: require Teams URL
+                        if (isWebViewSource || !string.IsNullOrEmpty(meeting.TeamsUrl))
                         {
                             if (now < meeting.Start)
                             {
@@ -484,12 +574,30 @@ namespace MeetNow
             }
         }
 
-        void MeetingItemClick(object sender, RoutedEventArgs e)
+        async void MeetingItemClick(object sender, RoutedEventArgs e)
         {
             if (sender is MenuItem menuItem && menuItem.Tag is TeamsMeeting meeting)
             {
                 Log.Information("Starting meeting: {Time} - {Subject} URL=[{Url}]", meeting.Start.ToString("HH:mm"), meeting.Subject, meeting.TeamsUrl);
-                OutlookHelper.StartTeamsMeeting(meeting.TeamsUrl);
+
+                var url = meeting.TeamsUrl;
+
+                // Lazy enrichment: if URL is a placeholder, fetch the real one from Outlook DOM
+                if (url == "teams-meeting")
+                {
+                    var resolved = await Tasks.CalendarCollectorTask.GetJoinUrlAsync(meeting.Subject);
+                    if (resolved != null)
+                    {
+                        meeting.TeamsUrl = resolved;
+                        url = resolved;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(url)
+                    && url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    OutlookHelper.StartTeamsMeeting(url);
+                }
             }
         }
         public static void SchedulePopup(DateTime startTime, List<TeamsMeeting> subjects)

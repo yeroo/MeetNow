@@ -1,68 +1,17 @@
 using Serilog;
 using System;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Threading;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace MeetNow
 {
     /// <summary>
-    /// Changes Teams presence/status using Teams slash commands.
-    /// Teams supports typing /available, /busy, /away, /dnd, /brb
-    /// in the search bar (Ctrl+E) to change status.
-    /// No CDP, no registry, no admin, no API required.
+    /// Changes Teams presence/status and automates chat via WebView DOM automation.
+    /// Replaces the previous Win32 P/Invoke approach (FindWindow, SendKeys, mouse_event)
+    /// with offscreen WebView2 DOM manipulation — no focus stealing, no fragile coordinates.
     /// </summary>
     public static class TeamsStatusManager
     {
-        [DllImport("user32.dll")]
-        private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll")]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-
-        [DllImport("user32.dll")]
-        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-
-        [DllImport("kernel32.dll")]
-        private static extern uint GetCurrentThreadId();
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        private static extern int SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("user32.dll")]
-        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-        [DllImport("user32.dll")]
-        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-        [DllImport("user32.dll")]
-        private static extern bool SetCursorPos(int x, int y);
-
-        [DllImport("user32.dll")]
-        private static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RECT { public int Left, Top, Right, Bottom; }
-
-        private const uint MOUSEEVENTF_LEFTDOWN = 0x02;
-        private const uint MOUSEEVENTF_LEFTUP = 0x04;
-
-        private const int SW_RESTORE = 9;
-        private const int SW_MINIMIZE = 6;
-        private const byte VK_CONTROL = 0x11;
-        private const byte VK_RETURN = 0x0D;
-        private const uint KEYEVENTF_KEYUP = 0x0002;
-
         public enum TeamsStatus
         {
             Available,
@@ -73,7 +22,23 @@ namespace MeetNow
         }
 
         /// <summary>
-        /// Set Teams status using slash commands in the search bar.
+        /// Run a JS script on the WebView via the UI thread dispatcher.
+        /// WebView2 WPF controls must be accessed from the thread that created them.
+        /// </summary>
+        private static async Task<string?> EvalOnUiThread(WebViewInstance instance, string script)
+        {
+            return await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.EvaluateJsAsync(script)).Task.Unwrap();
+        }
+
+        private static async Task NavigateOnUiThread(WebViewInstance instance, string url)
+        {
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.NavigateAndWaitAsync(url)).Task.Unwrap();
+        }
+
+        /// <summary>
+        /// Set Teams status using slash commands typed into the search bar via DOM automation.
         /// </summary>
         public static async Task<bool> SetStatusAsync(TeamsStatus status)
         {
@@ -87,257 +52,484 @@ namespace MeetNow
                 _ => "/available"
             };
 
-            Log.Information("Setting Teams status: {Status} (command: {Command})", status, command);
+            Log.Information("SetStatus: setting Teams status to {Status} (command: {Command})", status, command);
 
-            // Find Teams window
-            var teamsHwnd = FindTeamsWindow();
-            if (teamsHwnd == IntPtr.Zero)
+            var instance = WebViewManager.Instance.TeamsAutomationInstance;
+            if (instance == null || !instance.IsReady)
             {
-                Log.Warning("Teams window not found");
+                Log.Warning("SetStatus: TeamsAutomation WebView not available");
                 return false;
             }
 
-            // Remember current foreground window to restore later
-            var previousForeground = GetForegroundWindow();
-
             try
             {
-                // Bring Teams to foreground
-                TeamsOperationQueue.CurrentStep = "BringToForeground";
-                if (!BringToForeground(teamsHwnd))
-                {
-                    Log.Warning("Could not bring Teams to foreground");
-                    return false;
-                }
+                // Step 0: Navigate to Teams home to ensure clean state
+                TeamsOperationQueue.CurrentStep = "Navigating to Teams";
+                await NavigateOnUiThread(instance, "https://teams.microsoft.com");
+                await Task.Delay(2000);
 
-                await Task.Delay(300);
-
-                // Click on Teams window to ensure real keyboard focus
-                TeamsOperationQueue.CurrentStep = "Click to focus";
-                if (GetWindowRect(teamsHwnd, out var rect))
-                {
-                    int cx = (rect.Left + rect.Right) / 2;
-                    int cy = rect.Top + 50;
-                    SetCursorPos(cx, cy);
-                    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
-                    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
-                }
+                // Dismiss any dialogs with Escape
+                await EvalOnUiThread(instance, @"(function() {
+                    for (var i = 0; i < 3; i++) {
+                        document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', keyCode: 27, bubbles: true}));
+                    }
+                    return 'ok';
+                })();");
                 await Task.Delay(500);
 
-                // Navigate to Chat view first (Ctrl+3) to ensure clean state
-                TeamsOperationQueue.CurrentStep = "Ctrl+3 (Chat view)";
-                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-                keybd_event(0x33 /* 3 */, 0, 0, UIntPtr.Zero);
-                keybd_event(0x33, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                await Task.Delay(800);
+                // Step 1: Find the search input
+                TeamsOperationQueue.CurrentStep = "Finding search input";
+                var searchFound = await EvalOnUiThread(instance,@"(function() {
+                    var el = document.querySelector('#ms-searchux-input')
+                         || document.querySelector('input[id=""ms-searchux-input""]')
+                         || document.querySelector('input[type=""search""]')
+                         || document.querySelector('input[aria-label*=""Search""]')
+                         || document.querySelector('input[placeholder*=""Search""]');
+                    if (el) { el.focus(); el.click(); return 'found'; }
+                    return 'not_found';
+                })();");
 
-                // Dismiss any open dialogs first (press Esc 3 times)
-                TeamsOperationQueue.CurrentStep = "Esc x3 (dismiss dialogs)";
-                for (int i = 0; i < 3; i++)
+                // If search input not found, try clicking a search button first
+                if (searchFound != "found")
                 {
-                    keybd_event(0x1B /* ESC */, 0, 0, UIntPtr.Zero);
-                    keybd_event(0x1B, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                    await Task.Delay(200);
+                    TeamsOperationQueue.CurrentStep = "Clicking search button";
+                    Log.Information("SetStatus: search input not found directly, trying search button");
+
+                    // Click "Expand search box" button
+                    await EvalOnUiThread(instance, @"(function() {
+                        var btn = document.querySelector('button[aria-label*=""search"" i]')
+                               || document.querySelector('button[aria-label*=""Search""]');
+                        if (btn) btn.click();
+                    })();");
+
+                    await Task.Delay(1000);
+
+                    searchFound = await EvalOnUiThread(instance, @"(function() {
+                        var el = document.querySelector('#ms-searchux-input')
+                             || document.querySelector('input[type=""search""]')
+                             || document.querySelector('input[aria-label*=""Search""]');
+                        if (el) { el.focus(); el.click(); return 'found'; }
+                        return 'not_found';
+                    })();");
+
+                    if (searchFound != "found")
+                    {
+                        // Dump DOM diagnostics to understand Teams v2 structure
+                        var diag = await EvalOnUiThread(instance, @"(function() {
+                            var inputs = document.querySelectorAll('input');
+                            var buttons = document.querySelectorAll('button');
+                            var inputInfo = [];
+                            for (var i = 0; i < inputs.length && i < 10; i++) {
+                                inputInfo.push({
+                                    tag: 'input',
+                                    type: inputs[i].type,
+                                    id: inputs[i].id,
+                                    ariaLabel: (inputs[i].getAttribute('aria-label') || '').substring(0, 80),
+                                    placeholder: (inputs[i].placeholder || '').substring(0, 80),
+                                    className: (inputs[i].className || '').substring(0, 60)
+                                });
+                            }
+                            var btnInfo = [];
+                            for (var j = 0; j < buttons.length && j < 20; j++) {
+                                var label = buttons[j].getAttribute('aria-label') || '';
+                                var text = (buttons[j].textContent || '').trim();
+                                if (label.length > 0 || text.length > 0) {
+                                    btnInfo.push({
+                                        ariaLabel: label.substring(0, 80),
+                                        text: text.substring(0, 40),
+                                        id: buttons[j].id
+                                    });
+                                }
+                            }
+                            return JSON.stringify({ url: location.href, title: document.title, inputs: inputInfo, buttons: btnInfo });
+                        })();");
+                        Log.Warning("SetStatus: DOM diagnostic: {Diag}", diag);
+                        TeamsOperationQueue.CurrentStep = "Failed — search input not found";
+                        return false;
+                    }
                 }
 
+                // Step 2: Clear search and type command via CDP (real browser keystrokes)
+                TeamsOperationQueue.CurrentStep = $"Typing {command}";
+
+                // Focus the search input
+                await EvalOnUiThread(instance, @"(function() {
+                    var el = document.querySelector('#ms-searchux-input')
+                         || document.querySelector('input[type=""search""]');
+                    if (el) { el.focus(); el.select(); }
+                })();");
                 await Task.Delay(300);
 
-                // Press Ctrl+E to focus search bar
-                TeamsOperationQueue.CurrentStep = "Ctrl+E (search bar)";
-                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-                keybd_event(0x45 /* E */, 0, 0, UIntPtr.Zero);
-                keybd_event(0x45, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                // Type each character via CDP Input.dispatchKeyEvent (real browser-level input)
+                foreach (var ch in command)
+                {
+                    await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                        () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                    await Task.Delay(80);
+                }
 
-                await Task.Delay(800);
-
-                // Type the slash command
-                TeamsOperationQueue.CurrentStep = $"Typing {command}";
-                await TypeTextCharByChar(command);
-
-                // Wait for Teams autocomplete dropdown to appear
+                // Step 3: Wait for autocomplete
                 TeamsOperationQueue.CurrentStep = "Waiting for autocomplete";
-                await Task.Delay(1500);
+                await Task.Delay(2000);
 
-                // Press Enter to execute the slash command
+                // Step 4: Press Enter via CDP (real browser-level Enter key)
                 TeamsOperationQueue.CurrentStep = "Enter (execute)";
-                keybd_event(VK_RETURN, 0, 0, UIntPtr.Zero);
-                keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendEnterAsync()).Task.Unwrap();
+                Log.Information("SetStatus: Enter sent via CDP");
 
-                // Wait for Teams to process the status change
                 await Task.Delay(1000);
 
-                // Press Escape 3 times to close any remaining UI
-                TeamsOperationQueue.CurrentStep = "Esc x3 (cleanup)";
-                for (int i = 0; i < 3; i++)
-                {
-                    keybd_event(0x1B /* ESC */, 0, 0, UIntPtr.Zero);
-                    keybd_event(0x1B, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                    await Task.Delay(200);
-                }
-
-                TeamsOperationQueue.CurrentStep = "Done";
-                Log.Information("Teams status command sent: {Command}", command);
+                // Step 5: Dismiss with Escape
+                TeamsOperationQueue.CurrentStep = "Esc (cleanup)";
+                await EvalOnUiThread(instance,@"(function() {
+                    var el = document.activeElement || document.body;
+                    el.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'Escape', code: 'Escape', keyCode: 27, which: 27,
+                        bubbles: true, cancelable: true
+                    }));
+                })();");
 
                 await Task.Delay(300);
 
+                TeamsOperationQueue.CurrentStep = "Done";
+                Log.Information("SetStatus: Teams status command sent: {Command}", command);
                 return true;
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Error setting Teams status");
+                Log.Error(ex, "SetStatus: error setting Teams status");
+                TeamsOperationQueue.CurrentStep = "Failed";
                 return false;
             }
         }
 
-        private const byte VK_DELETE = 0x2E;
-        private const byte VK_TAB = 0x09;
-        private const byte VK_DOWN = 0x28;
-
         /// <summary>
-        /// Opens a 1:1 chat via Ctrl+E search, then clicks compose box.
-        /// Returns true if successful.
+        /// Open a 1:1 chat by searching for the person in the search box, then clicking their result.
+        /// Uses email if available, falls back to name. Returns true if compose box is focused.
         /// </summary>
-        private static async Task<bool> OpenChatAndFocusCompose(IntPtr teamsHwnd, string searchName, string logPrefix)
+        private static async Task<bool> OpenChatViaSearch(WebViewInstance instance, string senderName, string logPrefix)
         {
-            // Bring Teams to foreground
-            BringToForeground(teamsHwnd);
-            await Task.Delay(300);
+            string searchQuery;
 
-            // Click on the Teams window body to ensure keyboard focus
-            if (GetWindowRect(teamsHwnd, out var rect))
+            // If input is already an email, use it directly
+            if (senderName.Contains('@'))
             {
-                int cx = (rect.Left + rect.Right) / 2;
-                int cy = rect.Top + 50; // click near the top (title/toolbar area)
-                Log.Information("{Prefix}: clicking Teams body at ({X},{Y}) to ensure focus", logPrefix, cx, cy);
-                SetCursorPos(cx, cy);
-                mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
-                mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
+                searchQuery = senderName;
+            }
+            else
+            {
+                var searchName = ExtractSearchName(senderName);
+                // Try to get email for more precise search
+                var contacts = ContactDatabase.GetByName(searchName);
+                searchQuery = contacts.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.Email))?.Email ?? searchName;
+            }
+
+            Log.Information("{Prefix}: searching for '{Query}'", logPrefix, searchQuery);
+
+            // Navigate to Teams home first
+            TeamsOperationQueue.CurrentStep = "Navigating to Teams";
+            await NavigateOnUiThread(instance, "https://teams.microsoft.com");
+            await Task.Delay(5000); // Teams takes time to fully load
+
+            // Open new chat via Alt+Shift+N shortcut (CDP)
+            TeamsOperationQueue.CurrentStep = "Opening new chat (Alt+Shift+N)";
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.SendShortcutAsync("n", alt: true, shift: true)).Task.Unwrap();
+            Log.Information("{Prefix}: sent Alt+Shift+N", logPrefix);
+            await Task.Delay(3000); // Wait for new chat dialog to fully render
+
+            // Wait for the To field to appear and focus it (retry up to 5 times)
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                var focusResult = await EvalOnUiThread(instance, @"(function() {
+                    var toField = document.querySelector('input[aria-label*=""To""]')
+                              || document.querySelector('input[placeholder*=""name"" i]')
+                              || document.querySelector('input[placeholder*=""email"" i]')
+                              || document.querySelector('[data-tid*=""peoplepicker""] input')
+                              || document.querySelector('input[type=""text""]');
+                    if (toField) { toField.focus(); toField.click(); return 'focused'; }
+                    return 'not_found';
+                })();");
+                Log.Information("{Prefix}: To field focus attempt {Attempt}: {Result}", logPrefix, attempt + 1, focusResult);
+                if (focusResult == "focused") break;
+                await Task.Delay(1000);
             }
             await Task.Delay(500);
-            Log.Information("{Prefix}: Teams in foreground", logPrefix);
 
-            // Dismiss any open dialogs
-            await PressEscMultiple(3);
+            // Clear any existing text in the To field (backspace one by one, verify empty)
+            TeamsOperationQueue.CurrentStep = "Clearing To field";
+            for (int clearAttempt = 0; clearAttempt < 50; clearAttempt++)
+            {
+                var currentText = await EvalOnUiThread(instance, @"(function() {
+                    var toField = document.querySelector('input[aria-label*=""To""]')
+                              || document.querySelector('input[placeholder*=""name"" i]')
+                              || document.querySelector('input[placeholder*=""email"" i]')
+                              || document.querySelector('input[type=""text""]');
+                    return toField ? toField.value : '';
+                })();");
+
+                if (string.IsNullOrEmpty(currentText)) break;
+
+                Log.Information("{Prefix}: clearing To field, current: '{Text}'", logPrefix, currentText);
+
+                // Select all and delete
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendShortcutAsync("a", ctrl: true)).Task.Unwrap();
+                await Task.Delay(100);
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendKeyAsync("Backspace", 8)).Task.Unwrap();
+                await Task.Delay(200);
+            }
             await Task.Delay(300);
 
-            // Ctrl+N to open new chat
-            Log.Information("{Prefix}: opening new chat (Ctrl+N)", logPrefix);
-            keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-            keybd_event(0x4E /* N */, 0, 0, UIntPtr.Zero);
-            keybd_event(0x4E, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            await Task.Delay(800);
+            // Type the recipient char by char, verifying each character is accepted
+            TeamsOperationQueue.CurrentStep = $"Typing recipient: {searchQuery}";
+            foreach (var ch in searchQuery)
+            {
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                await Task.Delay(150);
+            }
 
-            // Type the person's name
-            Log.Information("{Prefix}: typing name '{Search}'", logPrefix, searchName);
-            await TypeTextCharByChar(searchName);
+            // Verify the typed text matches
+            var typedText = await EvalOnUiThread(instance, @"(function() {
+                var toField = document.querySelector('input[aria-label*=""To""]')
+                          || document.querySelector('input[placeholder*=""name"" i]')
+                          || document.querySelector('input[placeholder*=""email"" i]')
+                          || document.querySelector('input[type=""text""]');
+                return toField ? toField.value : '';
+            })();");
+            Log.Information("{Prefix}: typed '{Typed}', expected '{Expected}'", logPrefix, typedText, searchQuery);
+
+            // Wait for suggestions to appear
             await Task.Delay(2000);
 
-            // Press Down to highlight first result, then Enter to open chat
-            Log.Information("{Prefix}: selecting search result", logPrefix);
-            keybd_event(VK_DOWN, 0, 0, UIntPtr.Zero);
-            keybd_event(VK_DOWN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            await Task.Delay(300);
-            keybd_event(VK_RETURN, 0, 0, UIntPtr.Zero);
-            keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            // Press Enter to select first suggestion
+            TeamsOperationQueue.CurrentStep = "Selecting recipient";
+            await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                () => instance.SendEnterAsync()).Task.Unwrap();
+            await Task.Delay(1500);
+
+            // Dump search results DOM for debugging
+            var resultsDump = await EvalOnUiThread(instance, @"(function() {
+                var items = [];
+                // Broad search: anything that looks like a clickable result
+                var candidates = document.querySelectorAll('[role=""listitem""], [role=""option""], [data-tid*=""result""], [data-tid*=""person""], [class*=""result""], [class*=""Result""], [class*=""person""], [class*=""Person""]');
+                for (var i = 0; i < candidates.length && i < 10; i++) {
+                    items.push({
+                        tag: candidates[i].tagName,
+                        role: candidates[i].getAttribute('role') || '',
+                        ariaLabel: (candidates[i].getAttribute('aria-label') || '').substring(0, 80),
+                        text: (candidates[i].textContent || '').trim().substring(0, 80),
+                        dataTid: candidates[i].getAttribute('data-tid') || '',
+                        className: (candidates[i].className || '').substring(0, 60)
+                    });
+                }
+                return JSON.stringify({ count: candidates.length, items: items });
+            })();");
+            Log.Information("{Prefix}: search results DOM: {Dump}", logPrefix, resultsDump);
+
+            // Click the first search result
+            var resultClicked = await EvalOnUiThread(instance, @"(function() {
+                // Strategy 1: data-tid with result/person
+                var results = document.querySelectorAll('[data-tid*=""search-result""], [data-tid*=""person""]');
+                if (results.length > 0) { results[0].click(); return 'clicked_tid:' + results[0].getAttribute('data-tid'); }
+
+                // Strategy 2: role=listitem
+                var items = document.querySelectorAll('[role=""listitem""]');
+                if (items.length > 0) { items[0].click(); return 'clicked_listitem'; }
+
+                // Strategy 3: role=option
+                var options = document.querySelectorAll('[role=""option""]');
+                if (options.length > 0) { options[0].click(); return 'clicked_option'; }
+
+                // Strategy 4: any clickable with person-like class
+                var persons = document.querySelectorAll('[class*=""person"" i], [class*=""contact"" i], [class*=""result"" i]');
+                if (persons.length > 0) { persons[0].click(); return 'clicked_class'; }
+
+                return 'no_results';
+            })();");
+
+            Log.Information("{Prefix}: result click = {Result}", logPrefix, resultClicked);
+
+            if (resultClicked == "no_results")
+            {
+                Log.Warning("{Prefix}: no search results found for '{Query}'", logPrefix, searchQuery);
+                return false;
+            }
+
+            // Wait for chat to open
             await Task.Delay(2000);
 
-            // Click compose box area (bottom of main pane)
-            Log.Information("{Prefix}: clicking compose box", logPrefix);
-            ClickComposeBox(teamsHwnd);
-            await Task.Delay(500);
+            // Find and focus compose box
+            TeamsOperationQueue.CurrentStep = "Focusing compose box";
+            var composeFound = await EvalOnUiThread(instance, @"(function() {
+                var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
+                     || document.querySelector('[role=""textbox""][contenteditable=""true""]')
+                     || document.querySelector('div[contenteditable=""true""]');
+                if (el) { el.focus(); return 'found'; }
+                return 'not_found';
+            })();");
+
+            if (composeFound != "found")
+            {
+                Log.Warning("{Prefix}: compose box not found after search", logPrefix);
+                return false;
+            }
 
             return true;
         }
 
         /// <summary>
+        /// Clear the compose box using Ctrl+A then Backspace via CDP. Retries until empty.
+        /// </summary>
+        private static async Task ClearComposeBox(WebViewInstance instance)
+        {
+            for (int attempt = 0; attempt < 10; attempt++)
+            {
+                // Check if already empty
+                var text = await EvalOnUiThread(instance, @"(function() {
+                    var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
+                         || document.querySelector('[role=""textbox""][contenteditable=""true""]')
+                         || document.querySelector('div[contenteditable=""true""]');
+                    return el ? el.textContent.trim() : '';
+                })();");
+
+                if (string.IsNullOrEmpty(text)) break;
+
+                Log.Information("ClearComposeBox: attempt {Attempt}, current text: '{Text}'", attempt + 1, text);
+
+                // Ctrl+A to select all
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendShortcutAsync("a", ctrl: true)).Task.Unwrap();
+                await Task.Delay(200);
+
+                // Backspace to delete
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendKeyAsync("Backspace", 8)).Task.Unwrap();
+                await Task.Delay(300);
+            }
+        }
+
+        /// <summary>
+        /// Type text in the compose box via CDP, with verification.
+        /// </summary>
+        private static async Task TypeInComposeBox(WebViewInstance instance, string text, string logPrefix)
+        {
+            // Clear any existing text first
+            TeamsOperationQueue.CurrentStep = "Clearing compose box";
+            await ClearComposeBox(instance);
+
+            // Type each char
+            TeamsOperationQueue.CurrentStep = $"Typing '{text}'";
+            foreach (var ch in text)
+            {
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.TypeCharAsync(ch)).Task.Unwrap();
+                await Task.Delay(100);
+            }
+
+            // Verify
+            var typed = await EvalOnUiThread(instance, @"(function() {
+                var el = document.querySelector('[data-tid=""ckeditor-replyConversation""]')
+                     || document.querySelector('[role=""textbox""][contenteditable=""true""]')
+                     || document.querySelector('div[contenteditable=""true""]');
+                return el ? el.textContent.trim() : '';
+            })();");
+            Log.Information("{Prefix}: compose box typed '{Typed}', expected '{Expected}'", logPrefix, typed, text);
+        }
+
+        /// <summary>
         /// Opens the 1:1 chat with the sender, types "Hi", waits (typing indicator shows),
-        /// then clears the text. Does not send anything.
+        /// then clears the text. Does not send anything. Does not reload the page.
         /// </summary>
         public static async Task<bool> SimulateTypingAsync(string senderName)
         {
-            var searchName = ExtractSearchName(senderName);
-            Log.Information("SimulateTyping: start for '{Name}' (search: '{Search}')", senderName, searchName);
+            Log.Information("SimulateTyping: start for '{Name}'", senderName);
 
-            var teamsHwnd = FindTeamsWindow();
-            if (teamsHwnd == IntPtr.Zero)
+            var instance = WebViewManager.Instance.TeamsAutomationInstance;
+            if (instance == null || !instance.IsReady)
             {
-                Log.Warning("SimulateTyping: Teams window not found");
+                Log.Warning("SimulateTyping: TeamsAutomation WebView not available");
                 return false;
             }
 
             try
             {
-                await OpenChatAndFocusCompose(teamsHwnd, searchName, "SimulateTyping");
+                if (!await OpenChatViaSearch(instance, senderName, "SimulateTyping"))
+                {
+                    TeamsOperationQueue.CurrentStep = "Failed — chat not opened";
+                    return false;
+                }
 
-                // Type "Hi" — sender sees "is typing..."
+                // Type "Hi" via CDP — sender sees "is typing..."
+                await TypeInComposeBox(instance, "Hi", "SimulateTyping");
+
+                // Hold for configured duration
+                TeamsOperationQueue.CurrentStep = "Typing indicator active";
                 var typingDuration = MeetNowSettings.Instance.SimulateTypingDurationSeconds * 1000;
-                Log.Information("SimulateTyping: typing 'Hi', holding for {Duration}s", typingDuration / 1000);
-                await TypeTextCharByChar("Hi");
+                Log.Information("SimulateTyping: holding for {Duration}s", typingDuration / 1000);
                 await Task.Delay(typingDuration);
 
-                // Clear: Ctrl+A then Delete
-                Log.Information("SimulateTyping: clearing text");
-                keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
-                keybd_event(0x41 /* A */, 0, 0, UIntPtr.Zero);
-                keybd_event(0x41, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                await Task.Delay(100);
-                keybd_event(VK_DELETE, 0, 0, UIntPtr.Zero);
-                keybd_event(VK_DELETE, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                await Task.Delay(300);
+                // Clear the text without sending (Ctrl+A + Backspace)
+                TeamsOperationQueue.CurrentStep = "Clearing text";
+                await ClearComposeBox(instance);
 
-                await PressEscMultiple(3);
-
+                TeamsOperationQueue.CurrentStep = "Done";
                 Log.Information("SimulateTyping: complete for '{Name}'", senderName);
                 return true;
             }
             catch (Exception ex)
             {
                 Log.Error(ex, "SimulateTyping: error for '{Name}'", senderName);
+                TeamsOperationQueue.CurrentStep = "Failed";
                 return false;
             }
         }
 
         /// <summary>
-        /// Opens the 1:1 chat and actually sends a message.
+        /// Opens the 1:1 chat and actually sends a message. Does not reload the page.
         /// </summary>
         public static async Task<bool> SendMessageAsync(string senderName, string message)
         {
-            var searchName = ExtractSearchName(senderName);
-            Log.Information("SendMessage: start for '{Name}' (search: '{Search}'), message: '{Message}'",
-                senderName, searchName, message);
+            Log.Information("SendMessage: start for '{Name}', message: '{Message}'", senderName, message);
 
-            var teamsHwnd = FindTeamsWindow();
-            if (teamsHwnd == IntPtr.Zero)
+            var instance = WebViewManager.Instance.TeamsAutomationInstance;
+            if (instance == null || !instance.IsReady)
             {
-                Log.Warning("SendMessage: Teams window not found");
+                Log.Warning("SendMessage: TeamsAutomation WebView not available");
                 return false;
             }
 
             try
             {
-                await OpenChatAndFocusCompose(teamsHwnd, searchName, "SendMessage");
+                if (!await OpenChatViaSearch(instance, senderName, "SendMessage"))
+                {
+                    TeamsOperationQueue.CurrentStep = "Failed — chat not opened";
+                    return false;
+                }
 
-                // Type the message char by char
-                await TypeTextCharByChar(message);
+                // Type the message via CDP
+                await TypeInComposeBox(instance, message, "SendMessage");
+
                 await Task.Delay(500);
 
-                // Press Enter to SEND
-                keybd_event(VK_RETURN, 0, 0, UIntPtr.Zero);
-                keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+                // Press Enter to send via CDP
+                TeamsOperationQueue.CurrentStep = "Sending";
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => instance.SendEnterAsync()).Task.Unwrap();
+
                 await Task.Delay(1000);
 
-                await PressEscMultiple(3);
-
+                TeamsOperationQueue.CurrentStep = "Done";
                 Log.Information("SendMessage: sent '{Message}' to '{Name}'", message, senderName);
                 return true;
             }
             catch (Exception ex)
             {
                 Log.Error(ex, "SendMessage: error for '{Name}'", senderName);
+                TeamsOperationQueue.CurrentStep = "Failed";
                 return false;
             }
         }
@@ -367,159 +559,36 @@ namespace MeetNow
         }
 
         /// <summary>
-        /// Types text char by char with proper SendKeys escaping.
-        /// Special chars like +^%~(){}[] are escaped so they're typed literally.
+        /// Resolves a display name to a Teams user ID (e.g. "8:orgid:GUID") via ContactDatabase.
         /// </summary>
-        private static async Task TypeTextCharByChar(string text, int delayPerCharMs = 30)
+        private static string? ResolveTeamsUserId(string searchName)
         {
-            foreach (var c in text)
+            var contacts = ContactDatabase.GetByName(searchName);
+            var match = contacts.FirstOrDefault(c => !string.IsNullOrWhiteSpace(c.TeamsUserId));
+            if (match != null)
             {
-                var escaped = c switch
-                {
-                    '+' or '^' or '%' or '~' or '(' or ')' or '{' or '}' or '[' or ']' => $"{{{c}}}",
-                    _ => c.ToString()
-                };
-                System.Windows.Forms.SendKeys.SendWait(escaped);
-                await Task.Delay(delayPerCharMs);
+                Log.Information("ResolveTeamsUserId: '{Name}' -> {Id}", searchName, match.TeamsUserId);
+                return match.TeamsUserId;
             }
+
+            Log.Warning("ResolveTeamsUserId: no contact found for '{Name}'", searchName);
+            return null;
         }
 
         /// <summary>
-        /// Clicks in the Teams compose box area (bottom center of the window).
+        /// Navigates the automation instance back to the Teams home page.
         /// </summary>
-        private static void ClickComposeBox(IntPtr teamsHwnd)
+        private static async Task NavigateBackToTeams(WebViewInstance instance)
         {
-            if (GetWindowRect(teamsHwnd, out var rect))
-            {
-                int width = rect.Right - rect.Left;
-                int x = rect.Left + (int)(width * 0.65); // past the left sidebar
-                int y = rect.Bottom - 50; // compose box is near the very bottom
-                Log.Information("ClickComposeBox: window=({L},{T},{R},{B}), clicking at ({X}, {Y})",
-                    rect.Left, rect.Top, rect.Right, rect.Bottom, x, y);
-                SetCursorPos(x, y);
-                mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
-                mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
-            }
-        }
-
-        private static async Task PressEscMultiple(int count)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                keybd_event(0x1B, 0, 0, UIntPtr.Zero);
-                keybd_event(0x1B, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-                await Task.Delay(200);
-            }
-        }
-
-        private static IntPtr FindTeamsWindow()
-        {
-            var hwnd = FindTeamsWindowCore();
-            if (hwnd != IntPtr.Zero)
-                return hwnd;
-
-            // Teams window not found — try launching Teams and wait for its window
-            Log.Information("FindTeamsWindow: no window found, launching ms-teams:");
             try
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "ms-teams:",
-                    UseShellExecute = true
-                });
+                await NavigateOnUiThread(instance,"https://teams.microsoft.com");
+                await Task.Delay(1000);
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "FindTeamsWindow: failed to launch ms-teams:");
-                return IntPtr.Zero;
+                Log.Warning(ex, "NavigateBackToTeams: failed to navigate back");
             }
-
-            // Poll for the window to appear (up to 15 seconds)
-            for (int i = 0; i < 30; i++)
-            {
-                Thread.Sleep(500);
-                hwnd = FindTeamsWindowCore();
-                if (hwnd != IntPtr.Zero)
-                {
-                    Log.Information("FindTeamsWindow: Teams window appeared after {Ms}ms", (i + 1) * 500);
-                    return hwnd;
-                }
-            }
-
-            Log.Warning("FindTeamsWindow: Teams window did not appear after launch");
-            return IntPtr.Zero;
-        }
-
-        private static IntPtr FindTeamsWindowCore()
-        {
-            // Find by process name and window enumeration
-            var processes = Process.GetProcessesByName("ms-teams");
-            foreach (var proc in processes)
-            {
-                if (proc.MainWindowHandle != IntPtr.Zero)
-                {
-                    Log.Information("Found Teams window: PID={Pid}, Title={Title}",
-                        proc.Id, proc.MainWindowTitle);
-                    return proc.MainWindowHandle;
-                }
-            }
-
-            // Fallback: try "Teams" process name
-            processes = Process.GetProcessesByName("Teams");
-            foreach (var proc in processes)
-            {
-                if (proc.MainWindowHandle != IntPtr.Zero)
-                    return proc.MainWindowHandle;
-            }
-
-            return IntPtr.Zero;
-        }
-
-        [DllImport("user32.dll")]
-        private static extern bool AllowSetForegroundWindow(int processId);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr SetFocus(IntPtr hWnd);
-
-        private static bool BringToForeground(IntPtr hWnd)
-        {
-            // Get the target process ID for AllowSetForegroundWindow
-            GetWindowThreadProcessId(hWnd, out var targetPid);
-            AllowSetForegroundWindow((int)targetPid);
-
-            // Restore if minimized
-            ShowWindow(hWnd, SW_RESTORE);
-
-            // Attach to both foreground and target threads
-            var foregroundHwnd = GetForegroundWindow();
-            var foregroundThread = GetWindowThreadProcessId(foregroundHwnd, out _);
-            var targetThread = GetWindowThreadProcessId(hWnd, out _);
-            var currentThread = GetCurrentThreadId();
-
-            bool attached1 = false, attached2 = false;
-            try
-            {
-                if (foregroundThread != currentThread)
-                {
-                    attached1 = AttachThreadInput(currentThread, foregroundThread, true);
-                }
-                if (targetThread != currentThread && targetThread != foregroundThread)
-                {
-                    attached2 = AttachThreadInput(currentThread, targetThread, true);
-                }
-
-                SetForegroundWindow(hWnd);
-                SetFocus(hWnd);
-            }
-            finally
-            {
-                if (attached1) AttachThreadInput(currentThread, foregroundThread, false);
-                if (attached2) AttachThreadInput(currentThread, targetThread, false);
-            }
-
-            var success = GetForegroundWindow() == hWnd;
-            Log.Information("BringToForeground: {Result}, hWnd={HWnd}", success ? "OK" : "FAILED", hWnd);
-            return success;
         }
     }
 }

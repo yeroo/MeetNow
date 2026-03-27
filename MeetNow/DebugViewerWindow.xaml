@@ -1,0 +1,19 @@
+<Window x:Class="MeetNow.DebugViewerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MeetNow — Debug WebView"
+        Width="1200" Height="800"
+        WindowStartupLocation="CenterScreen">
+    <DockPanel>
+        <ToolBar DockPanel.Dock="Top">
+            <TextBlock Text="Instance:" VerticalAlignment="Center" Margin="0,0,4,0"/>
+            <ComboBox x:Name="InstanceCombo" Width="200"
+                      SelectionChanged="InstanceCombo_SelectionChanged"/>
+            <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="8,0,0,0"/>
+        </ToolBar>
+        <Border x:Name="ContentArea">
+            <TextBlock Text="Select an instance to inspect"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+    </DockPanel>
+</Window>
