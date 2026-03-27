@@ -43,12 +43,48 @@ MeetNow.Recording.Contracts/
   TranscriptResult.cs                     ← transcript output schema
   TranscriptSegment.cs                    ← segment with word-level timestamps
   MergedTranscript.cs                     ← session_transcript.json schema
-  ChunkStatus.cs                          ← enum: PendingTranscription, Transcribed, Archived
+  ChunkStatus.cs                          ← enum: PendingTranscription, Transcribing, Transcribed, Failed, Archived
   VadStats.cs                             ← speech frame counts
   SplitReason.cs                          ← enum: SilenceTimeout, MaxDuration, DeviceChange, ManualStop
 ```
 
 Both C# projects reference this. The Python transcriber reads/writes the same JSON shapes.
+
+### Chunk Status Lifecycle
+
+```
+PendingTranscription ──[Python claims chunk]──► Transcribing ──[success]──► Transcribed ──[FLAC compressed]──► Archived
+                                                     │
+                                                     └──[error after retries]──► Failed
+```
+
+- **PendingTranscription:** C# recorder writes this status when the chunk is complete and both WAV files are closed.
+- **Transcribing:** Python atomically claims the chunk by writing this status before starting work (see Atomic Claim Rule below).
+- **Transcribed:** Python writes this status after both channel transcripts are written successfully.
+- **Failed:** Python writes this status after exhausting retries (default: 3 attempts). Includes an `"error"` field in chunk JSON with the failure reason. Failed chunks are skipped on subsequent polls but remain on disk for manual inspection.
+- **Archived:** Written by the optional post-transcription archival pass after WAV→FLAC compression completes.
+
+### Atomic Claim Rule
+
+To prevent duplicate processing (e.g., after a crash/restart while another instance is still running, or if polling overlaps with a slow transcription), the Python transcriber uses an atomic claim protocol:
+
+1. Read `chunk_NNN.json` and check `status == "pending_transcription"`.
+2. Atomically write the JSON back with `status: "transcribing"` and `"claimedAtUtc": "<now>"`.
+3. Before writing, re-read and verify status is still `"pending_transcription"`. If it changed, skip (another worker claimed it).
+4. On Windows, use file locking (`msvcrt.locking` or `portalocker`) on the chunk JSON during the read-check-write to prevent TOCTOU races.
+5. If a chunk has `status: "transcribing"` but `claimedAtUtc` is older than 10 minutes, consider it abandoned and re-claim it (covers crash-during-transcription).
+
+The chunk JSON file is the single source of truth. **Orphan WAV files (WAVs without a corresponding chunk JSON) are ignored by the transcriber.** Only chunks with a valid JSON metadata file are processed.
+
+### Session Status Lifecycle
+
+```
+Recording ──[session gap detected OR manual stop]──► Completed ──[all chunks transcribed]──► Transcribed
+```
+
+- **Recording:** Active session. C# recorder is writing chunks.
+- **Completed:** Session ended (gap timeout or shutdown). `endTimeUtc` and final `chunkCount` are set. No more chunks will be added.
+- **Transcribed:** All chunks in the session have status `Transcribed` (or `Failed`). The `session_transcript.json` merged timeline is built only when this status is reached. Python sets this status after building the merged transcript.
 
 ### MeetNow.Recording.Core
 
@@ -136,7 +172,7 @@ Two independent capture streams:
 - **Loopback** — `WasapiLoopbackCapture` on default render device. Captures all system audio (all meeting participants).
 - **Microphone** — `WasapiCapture` on default capture device. Captures the user's voice only.
 
-Both streams are resampled and converted at capture time to a common format: **16kHz mono 16-bit PCM**. This is Whisper's native input format. No conversion needed before transcription.
+Both streams are resampled and converted at capture time to a normalized intermediate format: **16kHz mono 16-bit PCM**. This is an ASR-friendly format that Whisper and most speech recognition engines accept directly, avoiding any conversion step before transcription.
 
 At 16kHz mono 16-bit, each channel produces ~115 MB/hour (~32 KB/s).
 
@@ -185,16 +221,25 @@ During RECORDING, if loopback goes silent but mic VAD detects speech, the chunk 
 ### State Machine
 
 ```
-IDLE ──[hysteresis met on loopback]──► RECORDING ──[silence on BOTH]──► DRAINING ──[3s timeout]──► FLUSHING ──► IDLE
-                                           │              ▲                    │
-                                           │              └──[speech resumes]──┘
+IDLE ──[hysteresis met on loopback]──► RECORDING ──► MIC_KEEPALIVE ──► DRAINING ──[3s]──► FLUSHING ──► IDLE
+                                           │              │                  │
+                                           │    [loopback resumes]    [loopback resumes]
+                                           │              │                  │
+                                           │              ▼                  ▼
+                                           │◄─────────────┴──────────────────┘
                                            └──[max duration]──► FLUSHING ──► IDLE
 ```
 
 - **IDLE:** VAD runs on every loopback frame. Audio goes into ring buffer (both channels). Nothing written to disk.
-- **RECORDING:** Hysteresis met. Ring buffer drained into new chunk (both channels). All subsequent frames appended. Stays in RECORDING as long as speech frames arrive on either channel (with mic keepalive rules).
-- **DRAINING:** Loopback silence detected and mic keepalive window (10s) has elapsed without mic speech (or mic was already silent). Waiting for silence timeout. If speech resumes on loopback within timeout, back to RECORDING (same chunk).
-- **FLUSHING:** Silence timeout elapsed OR max chunk duration reached. Close WAV files for both channels. Write chunk metadata JSON. Update session metadata. Return to IDLE.
+- **RECORDING:** Hysteresis met. Ring buffer drained into new chunk (both channels). All subsequent frames appended. Stays in RECORDING as long as loopback VAD detects speech.
+- **MIC_KEEPALIVE:** Loopback went silent, but mic VAD still detects speech. The chunk stays open for up to the mic keepalive window (10s). Three exit paths:
+  - Loopback speech resumes → back to RECORDING (same chunk)
+  - Mic also goes silent → immediately advance to DRAINING
+  - Mic keepalive window expires (10s of loopback silence) → advance to DRAINING
+- **DRAINING:** Both channels are silent. Waiting for silence timeout (3s). If loopback speech resumes within the timeout, return to RECORDING (same chunk). Mic speech alone during DRAINING does NOT prevent the chunk from closing — only loopback can resume a draining chunk.
+- **FLUSHING:** Silence timeout elapsed OR max chunk duration reached. Close WAV files for both channels. Write chunk metadata JSON with `status: PendingTranscription`. Update session metadata. Return to IDLE.
+
+**Key rule:** Loopback is authoritative for opening and resuming chunks. Mic can only *extend* an already-open chunk via MIC_KEEPALIVE, never open or resume one.
 
 ### Max Chunk Duration Split
 
@@ -288,10 +333,14 @@ A new session starts when:
 }
 ```
 
+### Authoritative Metadata
+
+The **chunk JSON file is the single source of truth** for chunk state. WAV files without a corresponding chunk JSON are considered orphans and are ignored by the transcriber. This ensures crash recovery is simple: if C# crashes mid-write before creating the JSON, the orphan WAVs are harmless artifacts.
+
 ### Audio Format Choice
 
 **WAV** for intermediate storage:
-- Whisper reads WAV natively with zero conversion overhead
+- Whisper and most ASR engines read WAV directly with zero conversion overhead
 - No encoding CPU cost during recording
 - 5-minute chunk at 16kHz mono 16-bit = ~9.2 MB
 
@@ -340,11 +389,14 @@ while running:
         for chunk_json in (session_dir / "chunks").glob("chunk_*.json"):
             meta = json.loads(chunk_json.read_text())
             if meta["status"] == "pending_transcription":
-                transcribe(chunk_json, meta)
+                if claim_chunk(chunk_json, meta):       # atomic claim
+                    transcribe(chunk_json, meta)
+            elif meta["status"] == "transcribing":
+                reclaim_if_abandoned(chunk_json, meta)  # stale claim recovery
     time.sleep(2)
 ```
 
-Polling is resilient to filesystem race conditions and automatically picks up missed chunks on restart (crash recovery for free).
+Polling is resilient to filesystem race conditions and automatically picks up missed chunks on restart (crash recovery for free). The atomic claim protocol (see Contracts section) prevents duplicate processing.
 
 ### Transcript Output (`chunk_001_loopback.json`)
 
@@ -375,7 +427,7 @@ Word-level timestamps included — free from Faster-Whisper and critical for fut
 
 ### Merged Session Transcript
 
-Built after a session ends (10-minute gap or recorder shutdown):
+Built only when the session status is `Completed` and all chunks have reached a terminal status (`Transcribed` or `Failed`). The Python transcriber sets session status to `Transcribed` after building this file.
 
 ```json
 {
@@ -403,10 +455,10 @@ The `merged` view interleaves both channels by timestamp with `"me"` vs `"other"
 
 | Scenario | Recovery |
 |---|---|
-| C# crashes mid-chunk | WAV may be truncated. Python handles short WAVs. Chunk JSON may be missing — Python skips orphan WAVs. |
-| C# crashes between chunks | Completed chunks on disk with `pending_transcription`. Python transcribes on next poll. |
-| Python crashes mid-transcription | Status stays `pending_transcription`. Python retries on restart. Partial transcripts overwritten. |
-| Both crash | On restart, C# starts new session. Python picks up all pending chunks from all sessions. |
+| C# crashes mid-chunk | WAV may be truncated — Faster-Whisper handles short WAVs gracefully. Chunk JSON may be missing — orphan WAVs are ignored (JSON is authoritative). |
+| C# crashes between chunks | Completed chunks on disk with `PendingTranscription` status. Python picks them up on next poll. |
+| Python crashes mid-transcription | Chunk status is `Transcribing` with `claimedAtUtc`. On restart, the abandonment timeout (10 min) expires and the chunk is re-claimed and retried. Partial transcript files are overwritten. |
+| Both crash | On restart, C# starts new session. Python picks up all `PendingTranscription` and abandoned `Transcribing` chunks from all sessions. |
 
 ## Reliability and Edge Cases
 
