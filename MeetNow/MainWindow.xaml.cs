@@ -319,6 +319,7 @@ namespace MeetNow
 
                 Log.Information("Message urgency: {Urgency} ({Reason})", message.Urgency, message.UrgencyReason);
                 MessageSummaryWindow.AddMessage(message);
+                MessageHistory.Add(message);
 
                 if (AutopilotOverlay.IsActive)
                 {
