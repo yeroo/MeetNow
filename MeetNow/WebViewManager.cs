@@ -67,8 +67,8 @@ namespace MeetNow
 
                 _initialized = true;
 
-                // Start persistent instance (MessageMonitor on Teams Activity feed)
-                await StartPersistentAsync("https://teams.microsoft.com/v2/#/activity");
+                // Start persistent instance (MessageMonitor on Teams)
+                await StartPersistentAsync("https://teams.microsoft.com");
 
                 // Start calendar monitor instance (dedicated WebView for Outlook calendar)
                 await StartCalendarMonitorAsync();
@@ -319,7 +319,7 @@ namespace MeetNow
                         Log.Warning("WebViewManager: MessageMonitor heartbeat failed, recreating");
                         _persistent.Dispose();
                         _persistent = null;
-                        await StartPersistentAsync("https://teams.microsoft.com/v2/#/conversations");
+                        await StartPersistentAsync("https://teams.microsoft.com");
                     }
                 }
                 catch (Exception ex)
