@@ -57,15 +57,38 @@ Response logged to AutopilotChatWindow
 
 ### Session Management
 
-- `POST /session` with system prompt on first cycle → stores session ID
-- All subsequent cycles use `POST /session/{id}/message`
+- `POST /session` creates a bare session (with `title: "MeetNow Autopilot"`) → stores session ID
+- All cycles use `POST /session/{id}/message` with body:
+  ```json
+  {
+    "parts": [{ "type": "text", "text": "<context + prompt>" }],
+    "system": "<system prompt from autopilot-system.md>",
+    "model": "copilot/claude-sonnet-4-6"
+  }
+  ```
+- The `system` prompt is sent with every message (not stored at session level)
+- Uses the synchronous `POST /session/{id}/message` endpoint (blocks until LLM finishes, typically 10-30s) — not `prompt_async`
 - Session is persistent across cycles — the LLM remembers previous decisions
-- Session resets when: autopilot manually toggled off then on, or daily at midnight
-- If session errors (deleted, expired), create a new one automatically
+- Session resets when: autopilot manually toggled off then on, or when date changes (checked at each cycle start)
+- If session errors (404 or error response), create a new one automatically
+- If OpenCode restarts (detected via health check failure + recovery), stored session ID is invalidated and a new session is created on next cycle
+
+### Cycle Concurrency
+
+Only one cycle executes at a time. A `SemaphoreSlim(1, 1)` in `TriggerCycle()` ensures mutual exclusion:
+- If a cycle is running when a new trigger fires, the trigger is coalesced (a flag is set to re-trigger after the current cycle completes)
+- This prevents concurrent `POST /session/{id}/message` calls to the same session
+- The chat panel's "Send" button also acquires the semaphore — user messages are queued behind any running cycle
+
+### Error Handling
+
+- **Auth failure / model not found:** Log the LLM error response, skip the cycle, retry next trigger. Do not crash.
+- **Rate limiting:** If OpenCode returns a rate-limit error, back off the cycle timer to 10 minutes for the next 3 cycles.
+- **Context window growth:** After 50 cycles in one session, reset the session (create a new one). The LLM will lose history but the system prompt provides all behavioral rules. User instructions carry over (they're stored in `AutopilotAgent`, not the session).
 
 ## System Prompt
 
-Stored in `.opencode/commands/autopilot-system.md` (editable by user):
+Stored in `%LOCALAPPDATA%\MeetNow\autopilot-system.md` (editable by user). MeetNow reads this file at each cycle and passes it via the `system` field. A default is created on first run if the file doesn't exist:
 
 ```markdown
 You are Boris's Teams autopilot. You run continuously and manage his presence.
@@ -98,6 +121,11 @@ set_contact_priority
 - Boris walks his dog ~10-11am — consider going active during this time
 - Respect Boris's manual instructions above all rules
 
+## Efficiency
+- You have memory of all previous cycles in this session. Do not re-fetch data that has not changed.
+- Keep each cycle to 3-5 tool calls maximum.
+- If nothing has changed since last cycle, just say "No action needed."
+
 ## Response format
 After each cycle, briefly report what you did and why (1-2 sentences).
 ```
@@ -120,19 +148,19 @@ The chat input sends the message directly to the OpenCode session via `POST /ses
 
 ### `enable_autopilot`
 
-Switch to active mode. Shows red border overlay, allows the LLM to execute actions.
+Switch to active mode. Sets a flag in `AutopilotAgent` allowing the LLM to execute action tools. Also shows the red border overlay via `AutopilotOverlay.Enable()`. Does NOT automatically change Teams status — the LLM should call `set_availability` separately if needed.
 
 **Parameters:** None
 **Returns:** `{ "success": true, "mode": "active" }`
-**Execution:** `AutopilotOverlay.Enable()` (via UI dispatcher)
+**Execution:** `AutopilotAgent.SetMode(active)` + `AutopilotOverlay.Enable()` (via UI dispatcher). The `Enable()` call is modified to no longer set Teams status (that's the LLM's decision).
 
 ### `disable_autopilot`
 
-Switch to passive mode. Hides border overlay, LLM can only observe.
+Switch to passive mode. Hides border overlay. Does NOT change Teams status or clear the operation queue — the LLM should manage those explicitly if needed.
 
 **Parameters:** None
 **Returns:** `{ "success": true, "mode": "passive" }`
-**Execution:** `AutopilotOverlay.Disable()` (via UI dispatcher)
+**Execution:** `AutopilotAgent.SetMode(passive)` + `AutopilotOverlay.Disable()` (via UI dispatcher). The `Disable()` call is modified to no longer set Teams status or clear the queue.
 
 ### `send_instruction`
 
@@ -158,15 +186,26 @@ public int AutopilotMessageDebounceSeconds { get; set; } = 30;
 
 ### AutopilotOverlay.cs
 
-- Keeps its UI role: red border, "Autopilot OFF" button, auto-off timer
+- Keeps its UI role: red border, "Autopilot OFF" button
 - Removes all message tracking logic (`TrackUrgentMessage`, `_urgentMessageCounts`, `_pendingReplies`, `ScheduleAutoReplyAsync`) — this is now the LLM's job
-- `Enable()` / `Disable()` still toggle the overlay UI and set Teams status
+- Removes auto-off timer (`StartAutoOffTimer`) — end-of-day logic is now the LLM's job via the system prompt
+- `Enable()` / `Disable()` become UI-only: show/hide border overlay. No longer set Teams status or clear the operation queue — those are now the LLM's responsibilities via `set_availability` and explicit queue management
 - `AutopilotAgent` calls these methods; the LLM calls them via MCP tools
 
 ### MainWindow.xaml.cs
 
 - Add "Autopilot Chat" menu item to system tray context menu
-- Wire `MessageHistory.Add()` to also call `AutopilotAgent.TriggerCycle()` (debounced)
+- Remove the hardcoded `if (AutopilotOverlay.IsActive)` block in `OnTeamsMessageDetected` (lines 323-348) — this duplicates what the LLM now handles. Keep only `MessageHistory.Add(message)` followed by `AutopilotAgent.TriggerCycle()`
+- Remove `ForwardUrgentIfEnabled` method (forwarding logic moves to LLM)
+
+### McpServer.cs
+
+- Add `enable_autopilot`, `disable_autopilot`, `send_instruction` to `DispatchTool` and `GetToolDefinitions`
+- Update `ToolGetStatus` to include `autopilotMode` field ("active"/"passive") from `AutopilotAgent` instead of `pendingAutoReplies` (which is removed)
+
+### QueueOverlayWindow.cs
+
+- Remove references to `AutopilotOverlay.GetPendingAutoReplies()` (method no longer exists)
 
 ### McpServer.cs
 
@@ -184,12 +223,31 @@ public int AutopilotMessageDebounceSeconds { get; set; } = 30;
 | `MeetNow/AutopilotAgent.cs` | New — OpenCode serve management, session lifecycle, cycle triggers |
 | `MeetNow/AutopilotChatWindow.xaml` | New — chat panel UI (input + log) |
 | `MeetNow/AutopilotChatWindow.xaml.cs` | New — code-behind for chat window |
-| `.opencode/commands/autopilot-system.md` | New — system prompt for the LLM |
-| `MeetNow/McpServer.cs` | Add 3 MCP tools |
-| `MeetNow/AutopilotOverlay.cs` | Remove hardcoded message tracking logic, keep UI |
-| `MeetNow/MeetNowSettings.cs` | Add autopilot settings |
-| `MeetNow/MainWindow.xaml.cs` | Add chat menu item, wire message trigger |
+| `%LOCALAPPDATA%\MeetNow\autopilot-system.md` | New (created at runtime) — system prompt for the LLM |
+| `MeetNow/McpServer.cs` | Add 3 MCP tools, update `ToolGetStatus` |
+| `MeetNow/AutopilotOverlay.cs` | Remove message tracking, auto-off timer, status side effects — keep UI only |
+| `MeetNow/MeetNowSettings.cs` | Add autopilot settings; obsolete: `SimulateTypingInAutopilot`, `AutoReplyHiInAutopilot`, `ForwardUrgentInAutopilot`, `AutoReplyDelayMinutes`, `AutoReplyMessageThreshold`, `AutopilotOffTime` (keep but unused) |
+| `MeetNow/MainWindow.xaml.cs` | Remove hardcoded autopilot block in `OnTeamsMessageDetected`, add chat menu item, wire message trigger |
+| `MeetNow/QueueOverlayWindow.cs` | Remove `GetPendingAutoReplies()` references |
 | `MeetNow/App.xaml.cs` | Start/stop AutopilotAgent |
+
+## OpenCode Configuration
+
+OpenCode must be configured to know about the MeetNow MCP server. The stdio proxy is used (since SSE has compatibility issues with some clients):
+
+**`%USERPROFILE%\.config\opencode\opencode.json`** must include:
+```json
+{
+  "mcp": {
+    "meetnow": {
+      "type": "local",
+      "command": ["dotnet", "run", "--project", "C:\\Users\\Boris.Kudriashov\\Source\\repos\\MeetNow\\MeetNow.McpProxy"]
+    }
+  }
+}
+```
+
+This is a prerequisite — without it, the LLM will have no MCP tools available. `AutopilotAgent` should verify tools are available on the first cycle (check `tools/list` response) and log a warning if MeetNow tools are missing.
 
 ## Constraints
 
@@ -197,4 +255,4 @@ public int AutopilotMessageDebounceSeconds { get; set; } = 30;
 - OpenCode serve is localhost-only, no auth needed (same machine)
 - If OpenCode is unavailable, autopilot degrades gracefully (logs warning, no actions)
 - All actions still go through `TeamsOperationQueue` for sequential execution
-- System prompt is a user-editable file, not hardcoded
+- System prompt is a user-editable file at `%LOCALAPPDATA%\MeetNow\autopilot-system.md`, not hardcoded
