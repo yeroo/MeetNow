@@ -37,6 +37,12 @@ namespace MeetNow
         // MCP server
         public int McpPort { get; set; } = 27182;
 
+        // Smart Autopilot
+        public string AutopilotModel { get; set; } = "copilot/claude-sonnet-4-6";
+        public int OpenCodePort { get; set; } = 4096;
+        public int AutopilotCycleIntervalSeconds { get; set; } = 300;
+        public int AutopilotMessageDebounceSeconds { get; set; } = 30;
+
         public static MeetNowSettings Instance => _instance ??= Load();
 
         private static MeetNowSettings Load()
