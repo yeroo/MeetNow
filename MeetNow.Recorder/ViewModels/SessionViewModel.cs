@@ -53,6 +53,29 @@ public class SessionViewModel : BaseViewModel
 
     public bool HasTranscript => File.Exists(TranscriptPath);
 
+    public string DisplayDate
+    {
+        get
+        {
+            var local = StartTimeUtc.ToLocalTime();
+            var durationStr = Duration.TotalMinutes >= 1
+                ? Duration.ToString(@"h\:mm\:ss")
+                : $"{Duration.TotalSeconds:F0}s";
+            return $"{local:MMM d, h:mm tt}  ({durationStr})";
+        }
+    }
+
+    public string ProgressText
+    {
+        get
+        {
+            if (TotalChunks == 0) return Status;
+            if (FailedChunks > 0) return $"{TranscribedChunks}/{TotalChunks} transcribed, {FailedChunks} failed";
+            if (TranscribedChunks == TotalChunks) return $"{TotalChunks} chunks transcribed";
+            return $"{TranscribedChunks}/{TotalChunks} transcribed";
+        }
+    }
+
     public string TranscriptPath => Path.Combine(SessionDir, "transcript.txt");
 
     public SessionViewModel(string sessionDir)
@@ -127,6 +150,8 @@ public class SessionViewModel : BaseViewModel
 
         RefreshTranscriptionProgress();
         OnPropertyChanged(nameof(HasTranscript));
+        OnPropertyChanged(nameof(DisplayDate));
+        OnPropertyChanged(nameof(ProgressText));
     }
 
     private void RefreshTranscriptionProgress()
