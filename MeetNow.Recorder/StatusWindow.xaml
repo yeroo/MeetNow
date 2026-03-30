@@ -1,0 +1,269 @@
+<Window x:Class="MeetNow.Recorder.StatusWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:MeetNow.Recorder.Controls"
+        Title="MeetNow Recorder" Width="900" Height="600"
+        Background="#1F1F1F" WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+        </Style>
+        <Style x:Key="HeaderText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="SubText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#888888" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="Background" Value="#2A2A4A" />
+            <Setter Property="Foreground" Value="#E0E0E0" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FontFamily" Value="Segoe UI" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#3A3A5A" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="#4A4A6A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="280" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Left pane: Sessions list -->
+        <Border Grid.Column="0" Background="#1A1A2E">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="SESSIONS"
+                           FontSize="11" FontWeight="SemiBold" Foreground="#888888"
+                           Margin="12,12,12,8" />
+
+                <TextBlock x:Name="DiskUsageText" DockPanel.Dock="Bottom"
+                           Style="{StaticResource SubText}"
+                           Margin="12,8" />
+
+                <ListBox x:Name="SessionList"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         SelectionChanged="SessionList_SelectionChanged"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="12,8" />
+                            <Setter Property="Foreground" Value="#E0E0E0" />
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="BorderThickness" Value="0" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Bd"
+                                                Background="{TemplateBinding Background}"
+                                                Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="#2A2A4A" />
+                                            </Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="#22223A" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"
+                                           x:Name="StatusIcon" Text="&#x25CF;"
+                                           FontSize="10" VerticalAlignment="Center"
+                                           Margin="0,0,8,0" Foreground="#888888" />
+
+                                <TextBlock Grid.Column="1" Grid.Row="0"
+                                           Text="{Binding DisplayDate}"
+                                           Foreground="#E0E0E0" FontSize="12" FontFamily="Segoe UI" />
+
+                                <TextBlock Grid.Column="1" Grid.Row="1"
+                                           Text="{Binding ProgressText}"
+                                           Foreground="#888888" FontSize="10" FontFamily="Segoe UI" />
+                            </Grid>
+                            <DataTemplate.Triggers>
+                                <!-- Last trigger wins in WPF, so order from least to most specific -->
+                                <!-- Yellow: completed, waiting for transcription -->
+                                <DataTrigger Binding="{Binding Status}" Value="completed">
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#FFEB3B" />
+                                </DataTrigger>
+                                <!-- Orange: transcription in progress -->
+                                <DataTrigger Binding="{Binding IsTranscribing}" Value="True">
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#FF9800" />
+                                </DataTrigger>
+                                <!-- Red X: has failed chunks -->
+                                <DataTrigger Binding="{Binding HasFailedChunks}" Value="True">
+                                    <Setter TargetName="StatusIcon" Property="Text" Value="✕" />
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#F44336" />
+                                </DataTrigger>
+                                <!-- Red dot: actively recording -->
+                                <DataTrigger Binding="{Binding Status}" Value="recording">
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#F44336" />
+                                </DataTrigger>
+                                <!-- Green: transcribed status -->
+                                <DataTrigger Binding="{Binding Status}" Value="transcribed">
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#4CAF50" />
+                                </DataTrigger>
+                                <!-- Green: has transcript.txt (wins over yellow/orange) -->
+                                <DataTrigger Binding="{Binding HasTranscript}" Value="True">
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#4CAF50" />
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- Right pane: Detail -->
+        <DockPanel Grid.Column="1" Margin="16">
+            <!-- Disk space warning bar -->
+            <Border x:Name="DiskWarningBar" DockPanel.Dock="Top"
+                    Background="#FF9800" CornerRadius="3" Padding="12,6"
+                    Margin="0,0,0,8" Visibility="Collapsed">
+                <TextBlock x:Name="DiskWarningText" Foreground="White"
+                           FontWeight="SemiBold" FontSize="12" />
+            </Border>
+
+            <!-- Header -->
+            <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse x:Name="RecordingDot" Width="10" Height="10"
+                             Fill="#F44336" Margin="0,0,8,0"
+                             VerticalAlignment="Center" Visibility="Collapsed" />
+                    <TextBlock x:Name="HeaderText" Style="{StaticResource HeaderText}"
+                               Text="Select a session" />
+                </StackPanel>
+                <TextBlock x:Name="SubHeaderText" Style="{StaticResource SubText}"
+                           Margin="0,4,0,0" />
+            </StackPanel>
+
+            <!-- Audio meters -->
+            <StackPanel x:Name="AudioMetersPanel" DockPanel.Dock="Top"
+                        Margin="0,0,0,12" Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                    <TextBlock Text="Loopback" FontSize="10" Foreground="#888888"
+                               Width="60" VerticalAlignment="Center" />
+                    <controls:AudioLevelMeter x:Name="LoopbackMeter" Width="200" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Mic" FontSize="10" Foreground="#888888"
+                               Width="60" VerticalAlignment="Center" />
+                    <controls:AudioLevelMeter x:Name="MicMeter" Width="200" />
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Action buttons -->
+            <StackPanel x:Name="ActionButtonsPanel" DockPanel.Dock="Bottom"
+                        Orientation="Horizontal" Margin="0,12,0,0"
+                        Visibility="Collapsed">
+                <Button x:Name="CompleteSessionBtn" Content="Complete Session"
+                        Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                        Click="CompleteSession_Click" Visibility="Collapsed" />
+                <Button x:Name="GenerateTranscriptBtn" Content="Generate Transcript"
+                        Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                        Click="GenerateTranscript_Click" Visibility="Collapsed" />
+                <Button x:Name="OpenTranscriptBtn" Content="Open Transcript"
+                        Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                        Click="OpenTranscript_Click" />
+                <Button x:Name="OpenFolderBtn" Content="Open Folder"
+                        Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                        Click="OpenFolder_Click" />
+                <Button x:Name="RetryTranscriptionBtn" Content="Retry Transcription"
+                        Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                        Click="RetryTranscription_Click" />
+                <Button x:Name="DeleteSessionBtn" Content="Delete Session"
+                        Style="{StaticResource ActionButton}"
+                        Click="DeleteSession_Click" />
+            </StackPanel>
+
+            <!-- Audio player bar -->
+            <Border x:Name="AudioPlayerBar" DockPanel.Dock="Bottom"
+                    Background="#12122A" CornerRadius="4" Padding="12,8"
+                    Margin="0,8,0,0" Visibility="Collapsed">
+                <DockPanel>
+                    <Button x:Name="PlayPauseBtn" Content="&#x25B6;"
+                            Style="{StaticResource ActionButton}"
+                            Width="32" Height="32" Padding="0"
+                            DockPanel.Dock="Left" Margin="0,0,8,0"
+                            Click="PlayPause_Click" />
+
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                VerticalAlignment="Center" Margin="8,0,0,0">
+                        <RadioButton x:Name="ChannelLoopback" Content="Loopback"
+                                     Foreground="#E0E0E0" FontSize="10" Margin="0,0,8,0"
+                                     IsChecked="True" Checked="Channel_Changed"
+                                     GroupName="Channel" />
+                        <RadioButton x:Name="ChannelMic" Content="Mic"
+                                     Foreground="#E0E0E0" FontSize="10" Margin="0,0,8,0"
+                                     Checked="Channel_Changed"
+                                     GroupName="Channel" />
+                        <RadioButton x:Name="ChannelBoth" Content="Both"
+                                     Foreground="#E0E0E0" FontSize="10"
+                                     Checked="Channel_Changed"
+                                     GroupName="Channel" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="PositionText" DockPanel.Dock="Right"
+                               Foreground="#888888" FontSize="11"
+                               VerticalAlignment="Center" Margin="8,0,0,0"
+                               Text="0:00 / 0:00" />
+
+                    <Slider x:Name="SeekSlider" Minimum="0" Maximum="100"
+                            VerticalAlignment="Center"
+                            ValueChanged="SeekSlider_ValueChanged" />
+                </DockPanel>
+            </Border>
+
+            <!-- Transcript area -->
+            <ScrollViewer x:Name="TranscriptScroller" Background="#12122A"
+                          VerticalScrollBarVisibility="Auto"
+                          Padding="12">
+                <StackPanel x:Name="TranscriptPanel" />
+            </ScrollViewer>
+        </DockPanel>
+    </Grid>
+</Window>

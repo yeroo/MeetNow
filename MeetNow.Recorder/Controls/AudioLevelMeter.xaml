@@ -1,0 +1,10 @@
+<UserControl x:Class="MeetNow.Recorder.Controls.AudioLevelMeter"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Height="8">
+    <Grid>
+        <Border Background="#2A2A4A" CornerRadius="3" />
+        <Border x:Name="LevelBar" Background="#4CAF50" CornerRadius="3"
+                HorizontalAlignment="Left" />
+    </Grid>
+</UserControl>

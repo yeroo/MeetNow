@@ -374,6 +374,9 @@ namespace MeetNow
                 "send_message" => ToolSendMessage(args),
                 "simulate_typing" => ToolSimulateTyping(args),
                 "set_contact_priority" => ToolSetContactPriority(args),
+                "enable_autopilot" => ToolEnableAutopilot(),
+                "disable_autopilot" => ToolDisableAutopilot(),
+                "send_instruction" => ToolSendInstruction(args),
                 _ => throw new ArgumentException($"Unknown tool: {toolName}")
             };
         }
@@ -514,6 +517,32 @@ namespace MeetNow
                         },
                         required = new[] { "sender", "priority" }
                     }
+                },
+                new
+                {
+                    name = "enable_autopilot",
+                    description = "Switch autopilot to active mode. Shows red border overlay. Does NOT change Teams status — use set_availability separately.",
+                    inputSchema = new { type = "object", properties = new Dictionary<string, object>() }
+                },
+                new
+                {
+                    name = "disable_autopilot",
+                    description = "Switch autopilot to passive mode. Hides red border overlay. Does NOT change Teams status or clear queue.",
+                    inputSchema = new { type = "object", properties = new Dictionary<string, object>() }
+                },
+                new
+                {
+                    name = "send_instruction",
+                    description = "Send an instruction to the autopilot agent (e.g., 'I am in a doctor appointment, back at 3pm').",
+                    inputSchema = new
+                    {
+                        type = "object",
+                        properties = new Dictionary<string, object>
+                        {
+                            ["message"] = new { type = "string", description = "Instruction text" }
+                        },
+                        required = new[] { "message" }
+                    }
                 }
             };
         }
@@ -633,11 +662,11 @@ namespace MeetNow
         {
             var pending = TeamsOperationQueue.PendingSnapshot;
             var current = TeamsOperationQueue.Current;
+
             return new
             {
                 autopilotActive = AutopilotOverlay.IsActive,
-                pendingAutoReplies = AutopilotOverlay.GetPendingAutoReplies()
-                    .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToString("o")),
+                autopilotMode = AutopilotAgent.IsActive ? "active" : "passive",
                 queueCurrent = current?.Description,
                 queueCurrentStep = TeamsOperationQueue.CurrentStep,
                 queuePending = pending.Select(e => e.Description).ToArray(),
@@ -714,6 +743,30 @@ namespace MeetNow
 
             ContactPriorityProvider.SetPriority(sender, priority);
 
+            return new { success = true };
+        }
+
+        private static object ToolEnableAutopilot()
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() => AutopilotOverlay.Enable());
+            AutopilotAgent.SetMode(true);
+            return new { success = true, mode = "active" };
+        }
+
+        private static object ToolDisableAutopilot()
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() => AutopilotOverlay.Disable());
+            AutopilotAgent.SetMode(false);
+            return new { success = true, mode = "passive" };
+        }
+
+        private static object ToolSendInstruction(JsonElement? args)
+        {
+            var message = args?.TryGetProperty("message", out var m) == true ? m.GetString() : null;
+            if (string.IsNullOrEmpty(message))
+                throw new ArgumentException("Missing required parameter: message");
+
+            AutopilotAgent.AddInstruction(message);
             return new { success = true };
         }
 

@@ -42,9 +42,7 @@ namespace MeetNow
                 }
                 var current = TeamsOperationQueue.Current;
                 var pending = TeamsOperationQueue.PendingSnapshot;
-                var autoReplies = AutopilotOverlay.IsActive
-                    ? AutopilotOverlay.GetPendingAutoReplies()
-                    : new Dictionary<string, DateTime>();
+                var autoReplies = new Dictionary<string, DateTime>();
 
                 bool hasContent = current != null || pending.Count > 0 || autoReplies.Count > 0;
 
