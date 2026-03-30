@@ -78,6 +78,95 @@ public class SessionViewModel : BaseViewModel
 
     public string TranscriptPath => Path.Combine(SessionDir, "transcript.txt");
 
+    /// <summary>
+    /// Returns true if status is "recording" but no chunk files have been modified
+    /// in the last 2 minutes, indicating the recorder was killed without graceful shutdown.
+    /// </summary>
+    public bool IsStaleRecording()
+    {
+        if (Status != "recording")
+            return false;
+
+        var chunksDir = Path.Combine(SessionDir, "chunks");
+        if (!Directory.Exists(chunksDir))
+            return true; // "recording" with no chunks dir = definitely stale
+
+        var newestWrite = Directory.EnumerateFiles(chunksDir)
+            .Select(f => File.GetLastWriteTimeUtc(f))
+            .DefaultIfEmpty(DateTime.MinValue)
+            .Max();
+
+        return (DateTime.UtcNow - newestWrite).TotalMinutes > 2;
+    }
+
+    /// <summary>
+    /// Force-completes a stale recording session: sets status to "completed",
+    /// sets endTimeUtc from the last chunk, and refreshes.
+    /// </summary>
+    public void ForceComplete()
+    {
+        var sessionJsonPath = Path.Combine(SessionDir, "session.json");
+        if (!File.Exists(sessionJsonPath))
+            return;
+
+        // Find the endTimeUtc of the last chunk
+        DateTime? lastEndTime = null;
+        var chunksDir = Path.Combine(SessionDir, "chunks");
+        if (Directory.Exists(chunksDir))
+        {
+            foreach (var file in Directory.EnumerateFiles(chunksDir, "chunk_*.json"))
+            {
+                var fileName = Path.GetFileNameWithoutExtension(file);
+                if (fileName.Contains("_loopback") || fileName.Contains("_mic"))
+                    continue;
+
+                try
+                {
+                    var chunkJson = File.ReadAllText(file);
+                    using var chunkDoc = JsonDocument.Parse(chunkJson);
+                    if (chunkDoc.RootElement.TryGetProperty("endTimeUtc", out var endProp) &&
+                        endProp.TryGetDateTime(out var endTime))
+                    {
+                        if (lastEndTime == null || endTime > lastEndTime.Value)
+                            lastEndTime = endTime;
+                    }
+                }
+                catch
+                {
+                    // Skip malformed chunk files
+                }
+            }
+        }
+
+        // Read and rewrite session.json with updated status and endTimeUtc
+        try
+        {
+            var json = File.ReadAllText(sessionJsonPath);
+            var dict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
+            dict["status"] = JsonSerializer.SerializeToElement("completed");
+
+            if (lastEndTime.HasValue)
+            {
+                dict["endTimeUtc"] = JsonSerializer.SerializeToElement(lastEndTime.Value);
+            }
+            else
+            {
+                // Fallback: use the session.json file's last write time
+                dict["endTimeUtc"] = JsonSerializer.SerializeToElement(
+                    File.GetLastWriteTimeUtc(sessionJsonPath));
+            }
+
+            var updated = JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(sessionJsonPath, updated);
+        }
+        catch
+        {
+            // Failed to update session.json
+        }
+
+        Refresh();
+    }
+
     public SessionViewModel(string sessionDir)
     {
         SessionDir = sessionDir;

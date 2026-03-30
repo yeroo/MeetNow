@@ -16,6 +16,9 @@ public class RecorderViewModel : BaseViewModel, IDisposable
 
     public ObservableCollection<SessionViewModel> Sessions { get; } = [];
 
+    /// <summary>The SessionId of the currently-active recording session, or null.</summary>
+    public string? ActiveSessionId => _service.ActiveSessionId;
+
     private SessionViewModel? _selectedSession;
     public SessionViewModel? SelectedSession
     {

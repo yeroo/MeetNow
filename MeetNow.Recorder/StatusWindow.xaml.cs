@@ -170,16 +170,32 @@ public partial class StatusWindow : Window
             : $"{session.Duration.TotalSeconds:F0}s";
         SubHeaderText.Text = $"{session.Status} - {durationStr} - {session.TotalChunks} chunks";
 
-        // Recording dot
-        RecordingDot.Visibility = session.Status == "recording"
+        // Determine if this is the currently-active recording session
+        bool isActiveRecording = session.Status == "recording"
+            && session.SessionId == _viewModel.ActiveSessionId;
+
+        bool isStale = session.Status == "recording" && !isActiveRecording
+            && session.IsStaleRecording();
+
+        // Recording dot: show for active recordings only
+        RecordingDot.Visibility = isActiveRecording
             ? Visibility.Visible : Visibility.Collapsed;
 
-        // Audio meters: visible only for active recording session
-        AudioMetersPanel.Visibility = session.Status == "recording"
+        // Audio meters: visible only for the active recording session
+        AudioMetersPanel.Visibility = isActiveRecording
             ? Visibility.Visible : Visibility.Collapsed;
 
-        // Action buttons: visible for completed/failed sessions
-        ActionButtonsPanel.Visibility = session.Status != "recording"
+        // Action buttons: visible for ALL sessions except the currently-active recording
+        ActionButtonsPanel.Visibility = !isActiveRecording
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        // "Complete Session" button: visible when session is stale recording
+        CompleteSessionBtn.Visibility = isStale
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        // "Generate Transcript" button: visible when transcribed chunks exist but no transcript.txt
+        bool hasTranscribedChunks = session.TranscribedChunks > 0;
+        GenerateTranscriptBtn.Visibility = hasTranscribedChunks && !session.HasTranscript
             ? Visibility.Visible : Visibility.Collapsed;
 
         // Transcript button enabled only if transcript exists
@@ -191,8 +207,8 @@ public partial class StatusWindow : Window
         // Load transcript
         LoadTranscript(session);
 
-        // Audio player: available for completed sessions with chunks
-        if (session.Status != "recording" && session.TotalChunks > 0)
+        // Audio player: available for non-active sessions with chunks (including stale recordings)
+        if (!isActiveRecording && session.TotalChunks > 0)
         {
             SetupAudioPlayer(session);
             AudioPlayerBar.Visibility = Visibility.Visible;
@@ -342,6 +358,11 @@ public partial class StatusWindow : Window
             .OrderBy(f => f)
             .ToList();
 
+        // Collect all interleaved segments across all transcribed chunks
+        var allSegments = new List<(DateTime absoluteUtc, double relativeStart, string speaker, string text)>();
+        // Track non-transcribed chunks for status display
+        var nonTranscribedChunks = new List<(int index, double duration, string status)>();
+
         foreach (var chunkFile in chunkFiles)
         {
             try
@@ -356,30 +377,20 @@ public partial class StatusWindow : Window
                     ? statusProp.GetString() ?? "unknown"
                     : "unknown";
 
-                var statusColor = status switch
-                {
-                    "transcribed" => "#4CAF50",
-                    "transcribing" => "#FF9800",
-                    "failed" => "#F44336",
-                    _ => "#888888"
-                };
-
-                var header = new TextBlock
-                {
-                    Text = $"Chunk {chunkIndex} - {duration:F1}s - {status}",
-                    Foreground = new SolidColorBrush(
-                        (Color)ColorConverter.ConvertFromString(statusColor)),
-                    FontFamily = new FontFamily("Segoe UI"),
-                    FontSize = 11,
-                    FontWeight = FontWeights.SemiBold,
-                    Margin = new Thickness(0, 6, 0, 2)
-                };
-                TranscriptPanel.Children.Add(header);
-
-                // For transcribed chunks, show inline segments from transcript JSON
                 if (status == "transcribed")
                 {
-                    LoadChunkTranscriptSegments(session, chunkIndex);
+                    var chunkStartUtc = root.TryGetProperty("startTimeUtc", out var sp) && sp.TryGetDateTime(out var dt)
+                        ? dt
+                        : session.StartTimeUtc;
+
+                    // Load loopback segments
+                    LoadSegmentsFromJson(session, chunkIndex, "_loopback", chunkStartUtc, "Other", allSegments);
+                    // Load mic segments
+                    LoadSegmentsFromJson(session, chunkIndex, "_mic", chunkStartUtc, "Me", allSegments);
+                }
+                else
+                {
+                    nonTranscribedChunks.Add((chunkIndex, duration, status));
                 }
             }
             catch
@@ -387,13 +398,81 @@ public partial class StatusWindow : Window
                 // Skip malformed chunk metadata
             }
         }
+
+        // Show non-transcribed chunk headers
+        foreach (var (index, duration, status) in nonTranscribedChunks)
+        {
+            var statusColor = status switch
+            {
+                "transcribing" => "#FF9800",
+                "failed" => "#F44336",
+                _ => "#888888"
+            };
+
+            var header = new TextBlock
+            {
+                Text = $"Chunk {index} - {duration:F1}s - {status}",
+                Foreground = new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString(statusColor)),
+                FontFamily = new FontFamily("Segoe UI"),
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 6, 0, 2)
+            };
+            TranscriptPanel.Children.Add(header);
+        }
+
+        // Sort interleaved segments by absolute time and display
+        if (allSegments.Count > 0)
+        {
+            allSegments.Sort((a, b) => a.absoluteUtc.CompareTo(b.absoluteUtc));
+
+            string? lastSpeaker = null;
+            foreach (var (absoluteUtc, relativeStart, speaker, text) in allSegments)
+            {
+                // Blank line between speaker changes
+                if (lastSpeaker != null && speaker != lastSpeaker)
+                {
+                    TranscriptPanel.Children.Add(new TextBlock
+                    {
+                        Text = "",
+                        FontSize = 4,
+                        Margin = new Thickness(0, 2, 0, 2)
+                    });
+                }
+
+                var localTime = absoluteUtc.ToLocalTime();
+                var timeStr = localTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+                var color = SpeakerColors.TryGetValue(speaker, out var c) ? c : DefaultSpeakerColor;
+
+                var tb = new TextBlock
+                {
+                    Text = $"[{timeStr}] {speaker}: {text}",
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = new SolidColorBrush(
+                        (Color)ColorConverter.ConvertFromString(color)),
+                    FontFamily = new FontFamily("Segoe UI"),
+                    FontSize = 11,
+                    Margin = new Thickness(0, 1, 0, 1),
+                    Tag = TimeSpan.FromSeconds(relativeStart),
+                    Cursor = Cursors.Hand
+                };
+                tb.MouseLeftButtonDown += TranscriptLine_Click;
+                TranscriptPanel.Children.Add(tb);
+
+                lastSpeaker = speaker;
+            }
+        }
     }
 
-    private void LoadChunkTranscriptSegments(SessionViewModel session, int chunkIndex)
+    private static void LoadSegmentsFromJson(
+        SessionViewModel session, int chunkIndex, string channelSuffix,
+        DateTime chunkStartUtc, string speaker,
+        List<(DateTime absoluteUtc, double relativeStart, string speaker, string text)> segments)
     {
         var indexStr = chunkIndex.ToString("D3");
         var transcriptPath = Path.Combine(session.SessionDir, "transcripts",
-            $"chunk_{indexStr}_loopback.json");
+            $"chunk_{indexStr}{channelSuffix}.json");
 
         if (!File.Exists(transcriptPath))
             return;
@@ -404,35 +483,23 @@ public partial class StatusWindow : Window
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            if (root.TryGetProperty("segments", out var segmentsArr))
+            if (!root.TryGetProperty("segments", out var segmentsArr))
+                return;
+
+            foreach (var seg in segmentsArr.EnumerateArray())
             {
-                foreach (var seg in segmentsArr.EnumerateArray())
-                {
-                    var text = seg.TryGetProperty("text", out var textProp)
-                        ? textProp.GetString()?.Trim() ?? ""
-                        : "";
+                var text = seg.TryGetProperty("text", out var textProp)
+                    ? textProp.GetString()?.Trim() ?? ""
+                    : "";
 
-                    if (string.IsNullOrWhiteSpace(text))
-                        continue;
+                if (string.IsNullOrWhiteSpace(text))
+                    continue;
 
-                    var start = seg.TryGetProperty("start", out var startProp)
-                        ? startProp.GetDouble() : 0;
+                var start = seg.TryGetProperty("start", out var startProp)
+                    ? startProp.GetDouble() : 0;
 
-                    var tb = new TextBlock
-                    {
-                        Text = $"  {text}",
-                        TextWrapping = TextWrapping.Wrap,
-                        Foreground = new SolidColorBrush(
-                            (Color)ColorConverter.ConvertFromString("#B0B0B0")),
-                        FontFamily = new FontFamily("Segoe UI"),
-                        FontSize = 11,
-                        Margin = new Thickness(12, 1, 0, 1),
-                        Tag = TimeSpan.FromSeconds(start),
-                        Cursor = Cursors.Hand
-                    };
-                    tb.MouseLeftButtonDown += TranscriptLine_Click;
-                    TranscriptPanel.Children.Add(tb);
-                }
+                var absoluteUtc = chunkStartUtc.AddSeconds(start);
+                segments.Add((absoluteUtc, start, speaker, text));
             }
         }
         catch
@@ -605,6 +672,39 @@ public partial class StatusWindow : Window
     }
 
     // --- Action Buttons ---
+
+    private void CompleteSession_Click(object sender, RoutedEventArgs e)
+    {
+        if (SessionList.SelectedItem is not SessionViewModel session)
+            return;
+
+        session.ForceComplete();
+        ShowSessionDetail(session);
+    }
+
+    private void GenerateTranscript_Click(object sender, RoutedEventArgs e)
+    {
+        if (SessionList.SelectedItem is not SessionViewModel session)
+            return;
+
+        // Force-complete first if still stuck in "recording" status
+        if (session.Status == "recording")
+        {
+            session.ForceComplete();
+        }
+
+        try
+        {
+            TranscriptGenerator.Generate(session.SessionDir);
+            session.Refresh();
+            ShowSessionDetail(session);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to generate transcript: {ex.Message}", "Error",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
 
     private void OpenTranscript_Click(object sender, RoutedEventArgs e)
     {

@@ -38,6 +38,8 @@ public class RecorderService
     public bool IsRecording => _stateMachine?.State is RecorderState.Recording
         or RecorderState.MicKeepalive or RecorderState.Draining;
 
+    public string? ActiveSessionId => _activeSession?.SessionId;
+
     public RecorderConfig Config => _config;
 
     public RecorderService(RecorderConfig config)

@@ -180,6 +180,12 @@
             <StackPanel x:Name="ActionButtonsPanel" DockPanel.Dock="Bottom"
                         Orientation="Horizontal" Margin="0,12,0,0"
                         Visibility="Collapsed">
+                <Button x:Name="CompleteSessionBtn" Content="Complete Session"
+                        Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                        Click="CompleteSession_Click" Visibility="Collapsed" />
+                <Button x:Name="GenerateTranscriptBtn" Content="Generate Transcript"
+                        Style="{StaticResource ActionButton}" Margin="0,0,8,0"
+                        Click="GenerateTranscript_Click" Visibility="Collapsed" />
                 <Button x:Name="OpenTranscriptBtn" Content="Open Transcript"
                         Style="{StaticResource ActionButton}" Margin="0,0,8,0"
                         Click="OpenTranscript_Click" />
