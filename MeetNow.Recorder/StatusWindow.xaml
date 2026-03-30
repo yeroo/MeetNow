@@ -1,0 +1,10 @@
+<Window x:Class="MeetNow.Recorder.StatusWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MeetNow Recorder — Status"
+        Width="600" Height="400">
+    <TextBlock Text="Status Window — Coming Soon"
+               HorizontalAlignment="Center"
+               VerticalAlignment="Center"
+               FontSize="16" />
+</Window>

@@ -1,3 +1,4 @@
+using System.IO;
 using MeetNow.Recording.Contracts;
 using MeetNow.Recording.Core;
 using MeetNow.Recording.Core.Audio;
@@ -26,6 +27,14 @@ public class RecorderService
     private readonly List<short> _chunkLoopbackSamples = [];
     private readonly List<short> _chunkMicSamples = [];
     private DateTime? _lastChunkTimeUtc;
+
+    /// <summary>Fired when the recorder state changes. Wired up in Task 2.</summary>
+    public event Action<RecorderState>? StateChanged;
+
+    public bool IsRecording => _stateMachine?.State is RecorderState.Recording
+        or RecorderState.MicKeepalive or RecorderState.Draining;
+
+    public RecorderConfig Config => _config;
 
     public RecorderService(RecorderConfig config)
     {
@@ -58,9 +67,16 @@ public class RecorderService
         _deviceMonitor = new DeviceMonitor();
         _deviceMonitor.OnDefaultDeviceChanged += OnDeviceChanged;
 
-        // Start transcriber
-        _transcriber = new TranscriberProcessManager(_config);
-        var transcriberTask = _transcriber.StartAsync(ct);
+        // Start transcriber (if enabled)
+        if (_config.TranscriberEnabled)
+        {
+            _transcriber = new TranscriberProcessManager(_config);
+            _ = _transcriber.StartAsync(ct);
+        }
+        else
+        {
+            Log.Information("Transcriber disabled");
+        }
 
         // Start capture
         _capture.Start();
@@ -97,7 +113,7 @@ public class RecorderService
         _capture.Stop();
 
         // Stop transcriber
-        _transcriber.Dispose();
+        _transcriber?.Dispose();
 
         // Cleanup
         _capture.Dispose();

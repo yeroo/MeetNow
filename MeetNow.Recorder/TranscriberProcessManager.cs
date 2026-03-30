@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using MeetNow.Recording.Core.Config;
 using Serilog;
 
