@@ -28,8 +28,12 @@ public class RecorderService
     private readonly List<short> _chunkMicSamples = [];
     private DateTime? _lastChunkTimeUtc;
 
-    /// <summary>Fired when the recorder state changes. Wired up in Task 2.</summary>
+    /// <summary>Fired when the recorder state changes.</summary>
     public event Action<RecorderState>? StateChanged;
+    public event Action<float, float>? AudioLevelChanged;
+    public event Action<int, string>? ChunkFlushed;  // chunkIndex, sessionId
+    public event Action<string>? SessionStarted;      // sessionId
+    public event Action<string>? SessionCompleted;     // sessionId
 
     public bool IsRecording => _stateMachine?.State is RecorderState.Recording
         or RecorderState.MicKeepalive or RecorderState.Draining;
@@ -83,8 +87,6 @@ public class RecorderService
         Log.Information("Recorder started. Loopback: {Lb}, Mic: {Mic}",
             _capture.LoopbackDeviceName, _capture.MicDeviceName);
 
-        UpdateConsoleTitle("IDLE");
-
         // Periodic disk space check
         using var diskTimer = new PeriodicTimer(TimeSpan.FromMinutes(10));
 
@@ -108,6 +110,8 @@ public class RecorderService
 
         // Complete active session
         _activeSession?.Complete();
+        if (_activeSession != null)
+            SessionCompleted?.Invoke(_activeSession.SessionId);
 
         // Stop capture
         _capture.Stop();
@@ -129,6 +133,9 @@ public class RecorderService
         bool loopbackSpeech = _loopbackVad!.IsSpeech(loopbackFrame);
         bool micSpeech = _micVad!.IsSpeech(micFrame);
 
+        // Compute RMS audio levels for UI meters
+        AudioLevelChanged?.Invoke(ComputeRms(loopbackFrame), ComputeRms(micFrame));
+
         // Always accumulate into chunk buffers if recording
         if (_stateMachine!.State != RecorderState.Idle)
         {
@@ -138,7 +145,19 @@ public class RecorderService
             if (loopbackSpeech) _timeline.AddSpeechFrame();
         }
 
+        var prevState = _stateMachine.State;
         _stateMachine.ProcessFrame(loopbackSpeech, micSpeech);
+        if (_stateMachine.State != prevState)
+            StateChanged?.Invoke(_stateMachine.State);
+    }
+
+    private static float ComputeRms(short[] samples)
+    {
+        if (samples.Length == 0) return 0f;
+        double sum = 0;
+        for (int i = 0; i < samples.Length; i++)
+            sum += (double)samples[i] * samples[i];
+        return (float)Math.Sqrt(sum / samples.Length) / short.MaxValue;
     }
 
     private void OnRecordingStarted()
@@ -150,6 +169,7 @@ public class RecorderService
             _activeSession = _sessionManager!.StartNewSession(
                 _capture!.LoopbackDeviceName, _capture.MicDeviceName);
             Log.Information("New session: {Id}", _activeSession.SessionId);
+            SessionStarted?.Invoke(_activeSession.SessionId);
         }
 
         var chunkIndex = _activeSession.NextChunkIndex();
@@ -163,7 +183,6 @@ public class RecorderService
         _chunkLoopbackSamples.AddRange(preLoopback);
         _chunkMicSamples.AddRange(preMic);
 
-        UpdateConsoleTitle($"RECORDING chunk {chunkIndex:D3}");
         Log.Information("Recording started: chunk {Index}", chunkIndex);
     }
 
@@ -187,11 +206,11 @@ public class RecorderService
         Log.Information("Chunk {Index} flushed ({Duration:F1}s, reason: {Reason})",
             _timeline.ChunkIndex, _timeline.DurationSeconds, reason);
 
+        ChunkFlushed?.Invoke(_timeline.ChunkIndex, _activeSession!.SessionId);
+
         _chunkLoopbackSamples.Clear();
         _chunkMicSamples.Clear();
         _timeline.Reset();
-
-        UpdateConsoleTitle("IDLE");
     }
 
     private void OnDiscard()
@@ -200,7 +219,6 @@ public class RecorderService
         _chunkLoopbackSamples.Clear();
         _chunkMicSamples.Clear();
         _timeline!.Reset();
-        UpdateConsoleTitle("IDLE");
     }
 
     private void OnDeviceChanged(DataFlow flow, string deviceId)
@@ -236,18 +254,6 @@ public class RecorderService
         else if (freeMb < _config.MinFreeDiskMb)
         {
             Log.Warning("Low disk space: {FreeMb}MB free", freeMb);
-        }
-    }
-
-    private static void UpdateConsoleTitle(string status)
-    {
-        try
-        {
-            Console.Title = $"MeetNow Recorder [{status}]";
-        }
-        catch
-        {
-            // Console.Title can throw in non-console contexts
         }
     }
 }
