@@ -140,6 +140,14 @@
 
         <!-- Right pane: Detail -->
         <DockPanel Grid.Column="1" Margin="16">
+            <!-- Disk space warning bar -->
+            <Border x:Name="DiskWarningBar" DockPanel.Dock="Top"
+                    Background="#FF9800" CornerRadius="3" Padding="12,6"
+                    Margin="0,0,0,8" Visibility="Collapsed">
+                <TextBlock x:Name="DiskWarningText" Foreground="White"
+                           FontWeight="SemiBold" FontSize="12" />
+            </Border>
+
             <!-- Header -->
             <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                 <StackPanel Orientation="Horizontal">

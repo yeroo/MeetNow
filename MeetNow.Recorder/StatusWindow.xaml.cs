@@ -46,6 +46,7 @@ public partial class StatusWindow : Window
             SessionList.SelectedIndex = 0;
 
         UpdateDiskUsage();
+        LoadWindowPosition();
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -85,12 +86,68 @@ public partial class StatusWindow : Window
     private void UpdateDiskUsage()
     {
         DiskUsageText.Text = $"Disk: {_viewModel.FreeDiskMb:N0} MB free";
+        UpdateDiskWarningBar(_viewModel.FreeDiskMb);
+    }
+
+    private void UpdateDiskWarningBar(long freeMb)
+    {
+        if (freeMb < 500)
+        {
+            DiskWarningBar.Background = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString("#F44336"));
+            DiskWarningText.Text = $"CRITICAL: Only {freeMb} MB free!";
+            DiskWarningBar.Visibility = Visibility.Visible;
+        }
+        else if (freeMb < 1000)
+        {
+            DiskWarningBar.Background = new SolidColorBrush(
+                (Color)ColorConverter.ConvertFromString("#FF9800"));
+            DiskWarningText.Text = $"Low disk space: {freeMb} MB free";
+            DiskWarningBar.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            DiskWarningBar.Visibility = Visibility.Collapsed;
+        }
     }
 
     protected override void OnClosing(CancelEventArgs e)
     {
+        SaveWindowPosition();
         e.Cancel = true;
         Hide();
+    }
+
+    private void LoadWindowPosition()
+    {
+        var settingsPath = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "MeetNow", "recorder_window.json");
+        if (!File.Exists(settingsPath)) return;
+
+        try
+        {
+            var doc = JsonDocument.Parse(File.ReadAllText(settingsPath));
+            var root = doc.RootElement;
+            Left = root.GetProperty("left").GetDouble();
+            Top = root.GetProperty("top").GetDouble();
+            Width = root.GetProperty("width").GetDouble();
+            Height = root.GetProperty("height").GetDouble();
+        }
+        catch { }
+    }
+
+    private void SaveWindowPosition()
+    {
+        var settingsPath = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "MeetNow", "recorder_window.json");
+        try
+        {
+            var json = JsonSerializer.Serialize(new { left = Left, top = Top, width = Width, height = Height });
+            File.WriteAllText(settingsPath, json);
+        }
+        catch { }
     }
 
     private void SessionList_SelectionChanged(object sender, SelectionChangedEventArgs e)

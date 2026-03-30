@@ -39,6 +39,7 @@ public class TrayIcon : IDisposable
 
         // Subscribe to state changes to swap icons
         _service.StateChanged += OnStateChanged;
+        _service.ChunkFlushed += OnChunkFlushed;
 
         Log.Information("Tray icon initialized");
     }
@@ -121,12 +122,22 @@ public class TrayIcon : IDisposable
         });
     }
 
+    private void OnChunkFlushed(int chunkIndex, string sessionId)
+    {
+        Application.Current?.Dispatcher.Invoke(() =>
+        {
+            if (_service.IsRecording)
+                _taskbarIcon.ToolTipText = $"MeetNow Recorder — Recording (chunk {chunkIndex})";
+        });
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
 
         _service.StateChanged -= OnStateChanged;
+        _service.ChunkFlushed -= OnChunkFlushed;
         _taskbarIcon.Dispose();
         _iconIdle.Dispose();
         _iconRecording.Dispose();
