@@ -23,6 +23,7 @@ public class RecorderConfig
     public int SessionGapMinutes { get; set; } = 10;
 
     // Transcription
+    public bool TranscriberEnabled { get; set; } = true;
     public string PythonPath { get; set; } = "python";
     public string TranscriberModel { get; set; } = "small";
     public string TranscriberDevice { get; set; } = "cuda";

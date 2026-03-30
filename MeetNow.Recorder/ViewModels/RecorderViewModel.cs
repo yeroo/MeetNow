@@ -107,6 +107,26 @@ public class RecorderViewModel : BaseViewModel, IDisposable
             }
         }
 
+        // Auto-generate transcript.txt for any session that's fully transcribed but missing it
+        foreach (var session in Sessions)
+        {
+            if (!session.HasTranscript
+                && session.TotalChunks > 0
+                && session.TranscribedChunks + session.FailedChunks >= session.TotalChunks)
+            {
+                try
+                {
+                    TranscriptGenerator.Generate(session.SessionDir);
+                    session.Refresh();
+                    Log.Information("Auto-generated transcript for session {Id}", session.SessionId);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to auto-generate transcript for {Id}", session.SessionId);
+                }
+            }
+        }
+
         SelectedSession = Sessions.FirstOrDefault();
     }
 
@@ -171,6 +191,23 @@ public class RecorderViewModel : BaseViewModel, IDisposable
                 var sessionId = parts[0];
                 var session = FindSession(sessionId);
                 session?.Refresh();
+
+                // Auto-generate transcript.txt when all chunks are transcribed
+                if (session != null && !session.HasTranscript
+                    && session.TotalChunks > 0
+                    && session.TranscribedChunks + session.FailedChunks >= session.TotalChunks)
+                {
+                    try
+                    {
+                        TranscriptGenerator.Generate(session.SessionDir);
+                        session.Refresh();
+                        Log.Information("Auto-generated transcript for session {Id}", sessionId);
+                    }
+                    catch (Exception genEx)
+                    {
+                        Log.Warning(genEx, "Failed to auto-generate transcript for {Id}", sessionId);
+                    }
+                }
 
                 // Update disk space when files change
                 UpdateDiskSpace();

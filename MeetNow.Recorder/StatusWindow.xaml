@@ -125,10 +125,30 @@
                                            Foreground="#888888" FontSize="10" FontFamily="Segoe UI" />
                             </Grid>
                             <DataTemplate.Triggers>
+                                <!-- Last trigger wins in WPF, so order from least to most specific -->
+                                <!-- Yellow: completed, waiting for transcription -->
+                                <DataTrigger Binding="{Binding Status}" Value="completed">
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#FFEB3B" />
+                                </DataTrigger>
+                                <!-- Orange: transcription in progress -->
+                                <DataTrigger Binding="{Binding IsTranscribing}" Value="True">
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#FF9800" />
+                                </DataTrigger>
+                                <!-- Red X: has failed chunks -->
+                                <DataTrigger Binding="{Binding HasFailedChunks}" Value="True">
+                                    <Setter TargetName="StatusIcon" Property="Text" Value="✕" />
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#F44336" />
+                                </DataTrigger>
+                                <!-- Red dot: actively recording -->
                                 <DataTrigger Binding="{Binding Status}" Value="recording">
                                     <Setter TargetName="StatusIcon" Property="Foreground" Value="#F44336" />
                                 </DataTrigger>
-                                <DataTrigger Binding="{Binding Status}" Value="completed">
+                                <!-- Green: transcribed status -->
+                                <DataTrigger Binding="{Binding Status}" Value="transcribed">
+                                    <Setter TargetName="StatusIcon" Property="Foreground" Value="#4CAF50" />
+                                </DataTrigger>
+                                <!-- Green: has transcript.txt (wins over yellow/orange) -->
+                                <DataTrigger Binding="{Binding HasTranscript}" Value="True">
                                     <Setter TargetName="StatusIcon" Property="Foreground" Value="#4CAF50" />
                                 </DataTrigger>
                             </DataTemplate.Triggers>

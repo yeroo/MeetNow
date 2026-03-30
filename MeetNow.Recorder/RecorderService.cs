@@ -42,6 +42,12 @@ public class RecorderService
 
     public RecorderConfig Config => _config;
 
+    /// <summary>
+    /// When true, audio frames are ignored (no VAD, no recording).
+    /// Used to suppress recording during playback of own recordings.
+    /// </summary>
+    public volatile bool Paused;
+
     public RecorderService(RecorderConfig config)
     {
         _config = config;
@@ -132,6 +138,12 @@ public class RecorderService
 
     private void OnFrameAvailable(short[] loopbackFrame, short[] micFrame)
     {
+        if (Paused)
+        {
+            AudioLevelChanged?.Invoke(0f, 0f);
+            return;
+        }
+
         bool loopbackSpeech = _loopbackVad!.IsSpeech(loopbackFrame);
         bool micSpeech = _micVad!.IsSpeech(micFrame);
 

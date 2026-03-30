@@ -44,6 +44,8 @@ public class TrayIcon : IDisposable
         Log.Information("Tray icon initialized");
     }
 
+    private MenuItem? _pauseItem;
+
     private ContextMenu BuildContextMenu()
     {
         var menu = new ContextMenu();
@@ -54,11 +56,28 @@ public class TrayIcon : IDisposable
 
         menu.Items.Add(new Separator());
 
+        _pauseItem = new MenuItem { Header = "Pause Recording" };
+        _pauseItem.Click += OnPauseClick;
+        menu.Items.Add(_pauseItem);
+
+        menu.Items.Add(new Separator());
+
         var exitItem = new MenuItem { Header = "Exit" };
         exitItem.Click += OnExitClick;
         menu.Items.Add(exitItem);
 
         return menu;
+    }
+
+    private void OnPauseClick(object sender, RoutedEventArgs e)
+    {
+        _service.Paused = !_service.Paused;
+        _pauseItem!.Header = _service.Paused ? "Resume Recording" : "Pause Recording";
+        _taskbarIcon.ToolTipText = _service.Paused
+            ? "MeetNow Recorder — Paused"
+            : "MeetNow Recorder — Idle";
+        _taskbarIcon.Icon = _service.Paused ? _iconTranscribing : _iconIdle;
+        Log.Information("Recording {State}", _service.Paused ? "paused" : "resumed");
     }
 
     private void OnDoubleClick(object sender, RoutedEventArgs e)
@@ -100,6 +119,8 @@ public class TrayIcon : IDisposable
         // Must update icon on UI thread
         Application.Current.Dispatcher.Invoke(() =>
         {
+            if (_service.Paused) return; // Don't update icons while paused
+
             switch (state)
             {
                 case RecorderState.Recording:

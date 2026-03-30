@@ -79,7 +79,14 @@ public static class TranscriptGenerator
         }
 
         if (allSegments.Count == 0)
-            throw new InvalidOperationException("No transcript segments found");
+        {
+            // Write an empty transcript for sessions with no speech detected
+            var emptyPath = Path.Combine(sessionDir, "transcript.txt");
+            File.WriteAllText(emptyPath,
+                $"Meeting Transcript \u2014 {Path.GetFileName(sessionDir)}\n(No speech detected)\n",
+                Encoding.UTF8);
+            return;
+        }
 
         // Sort by absolute time
         allSegments.Sort((a, b) => a.AbsoluteTimeUtc.CompareTo(b.AbsoluteTimeUtc));
@@ -142,6 +149,14 @@ public static class TranscriptGenerator
 
                 if (string.IsNullOrWhiteSpace(text))
                     continue;
+
+                // Filter Whisper hallucinations: skip segments with mostly non-ASCII text
+                if (text.Length > 3)
+                {
+                    int asciiCount = text.Count(c => c < 128);
+                    if ((double)asciiCount / text.Length < 0.5)
+                        continue;
+                }
 
                 var startSec = seg.TryGetProperty("start", out var startProp)
                     ? startProp.GetDouble() : 0;

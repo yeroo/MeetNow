@@ -7,6 +7,7 @@ from pathlib import Path
 from faster_whisper import WhisperModel
 
 from .config import TranscriberConfig
+from .speakers import extract_segment_embeddings
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,15 @@ class TranscriptionEngine:
 
         segments = []
         for seg in segments_iter:
+            text = seg.text.strip()
+
+            # Filter Whisper hallucinations: skip segments with mostly non-ASCII text
+            if text and len(text) > 3:
+                ascii_count = sum(1 for c in text if ord(c) < 128)
+                if ascii_count / len(text) < 0.5:
+                    log.debug("Skipping hallucinated segment: %s", text[:60])
+                    continue
+
             words = []
             if seg.words:
                 for w in seg.words:
@@ -62,16 +72,24 @@ class TranscriptionEngine:
             segments.append({
                 "start": round(seg.start, 3),
                 "end": round(seg.end, 3),
-                "text": seg.text.strip(),
+                "text": text,
                 "words": words,
             })
+
+        # Extract speaker embeddings for loopback (multi-speaker) channel
+        embeddings = None
+        if channel == "loopback" and segments:
+            try:
+                embeddings = extract_segment_embeddings(wav_path, segments)
+            except Exception as e:
+                log.warning("Speaker embedding extraction failed: %s", e)
 
         elapsed = time.monotonic() - start_time
         log.info("  %s/%03d: lang=%s (%.0f%%), %d segments, %.1fs",
                  channel, chunk_index, info.language,
                  info.language_probability * 100, len(segments), elapsed)
 
-        return {
+        result = {
             "chunkIndex": chunk_index,
             "channel": channel,
             "language": info.language,
@@ -81,3 +99,8 @@ class TranscriptionEngine:
             "modelName": self.config.model,
             "timestampUtcBase": timestamp_utc_base,
         }
+
+        if embeddings is not None:
+            result["embeddings"] = embeddings
+
+        return result

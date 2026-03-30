@@ -41,6 +41,10 @@ public partial class App : Application
             Log.Information("MeetNow Recorder starting...");
 
             var config = LoadConfig();
+
+            // Auto-generate transcript.txt for any fully-transcribed sessions
+            GeneratePendingTranscripts(config.OutputDir);
+
             _service = new RecorderService(config);
             _trayIcon = new TrayIcon(_service);
             _cts = new CancellationTokenSource();
@@ -76,6 +80,118 @@ public partial class App : Application
         _singleInstanceMutex?.Dispose();
         Log.CloseAndFlush();
         base.OnExit(e);
+    }
+
+    /// <summary>
+    /// On startup: complete any stale "recording" sessions left behind by previous crashes,
+    /// then generate transcript.txt for any fully-transcribed sessions missing it.
+    /// </summary>
+    private static void GeneratePendingTranscripts(string recordingsDir)
+    {
+        if (!System.IO.Directory.Exists(recordingsDir)) return;
+
+        foreach (var sessionDir in System.IO.Directory.GetDirectories(recordingsDir))
+        {
+            var sessionJsonPath = System.IO.Path.Combine(sessionDir, "session.json");
+            if (!System.IO.File.Exists(sessionJsonPath)) continue;
+
+            // Step 1: Complete stale "recording" sessions.
+            // On startup no session is active yet, so ALL "recording" sessions are stale.
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(
+                    System.IO.File.ReadAllText(sessionJsonPath));
+                var status = doc.RootElement.GetProperty("status").GetString();
+
+                if (status == "recording")
+                {
+                    // Find endTimeUtc from last chunk
+                    DateTime? lastEnd = null;
+                    var chunksDir = System.IO.Path.Combine(sessionDir, "chunks");
+                    if (System.IO.Directory.Exists(chunksDir))
+                    {
+                        foreach (var cf in System.IO.Directory.GetFiles(chunksDir, "chunk_*.json"))
+                        {
+                            var n = System.IO.Path.GetFileNameWithoutExtension(cf);
+                            if (n.Contains("_loopback") || n.Contains("_mic")) continue;
+                            try
+                            {
+                                using var cd = System.Text.Json.JsonDocument.Parse(
+                                    System.IO.File.ReadAllText(cf));
+                                if (cd.RootElement.TryGetProperty("endTimeUtc", out var ep)
+                                    && ep.TryGetDateTime(out var et))
+                                {
+                                    if (lastEnd == null || et > lastEnd) lastEnd = et;
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+
+                    // Rewrite session.json with completed status
+                    var dict = System.Text.Json.JsonSerializer.Deserialize<
+                        Dictionary<string, System.Text.Json.JsonElement>>(
+                        System.IO.File.ReadAllText(sessionJsonPath))!;
+                    dict["status"] = System.Text.Json.JsonSerializer.SerializeToElement("completed");
+                    if (lastEnd.HasValue)
+                        dict["endTimeUtc"] = System.Text.Json.JsonSerializer.SerializeToElement(lastEnd.Value);
+                    System.IO.File.WriteAllText(sessionJsonPath,
+                        System.Text.Json.JsonSerializer.Serialize(dict,
+                            new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+                    Log.Information("Completed stale session {Session}",
+                        System.IO.Path.GetFileName(sessionDir));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to complete stale session {Session}",
+                    System.IO.Path.GetFileName(sessionDir));
+            }
+
+            // Step 2: Generate transcript.txt if all chunks are transcribed
+            var transcriptPath = System.IO.Path.Combine(sessionDir, "transcript.txt");
+            if (System.IO.File.Exists(transcriptPath)) continue;
+
+            var cDir = System.IO.Path.Combine(sessionDir, "chunks");
+            if (!System.IO.Directory.Exists(cDir)) continue;
+
+            bool allDone = true;
+            bool hasChunks = false;
+            foreach (var chunkFile in System.IO.Directory.GetFiles(cDir, "chunk_*.json"))
+            {
+                var name = System.IO.Path.GetFileNameWithoutExtension(chunkFile);
+                if (name.Contains("_loopback") || name.Contains("_mic")) continue;
+                hasChunks = true;
+
+                try
+                {
+                    using var cd = System.Text.Json.JsonDocument.Parse(
+                        System.IO.File.ReadAllText(chunkFile));
+                    var s = cd.RootElement.GetProperty("status").GetString();
+                    if (s is not ("transcribed" or "failed"))
+                    {
+                        allDone = false;
+                        break;
+                    }
+                }
+                catch { allDone = false; break; }
+            }
+
+            if (!hasChunks || !allDone) continue;
+
+            try
+            {
+                TranscriptGenerator.Generate(sessionDir);
+                Log.Information("Auto-generated transcript for {Session}",
+                    System.IO.Path.GetFileName(sessionDir));
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to generate transcript for {Session}",
+                    System.IO.Path.GetFileName(sessionDir));
+            }
+        }
     }
 
     private static RecorderConfig LoadConfig()

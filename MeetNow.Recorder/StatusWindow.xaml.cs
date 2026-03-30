@@ -17,6 +17,7 @@ namespace MeetNow.Recorder;
 public partial class StatusWindow : Window
 {
     private readonly RecorderViewModel _viewModel;
+    private readonly RecorderService _service;
     private SessionAudioPlayer? _player;
     private DispatcherTimer? _positionTimer;
     private bool _isSeeking;
@@ -36,6 +37,7 @@ public partial class StatusWindow : Window
     {
         InitializeComponent();
 
+        _service = service;
         _viewModel = new RecorderViewModel(service);
         SessionList.ItemsSource = _viewModel.Sessions;
 
@@ -242,43 +244,67 @@ public partial class StatusWindow : Window
             foreach (var line in lines)
             {
                 if (string.IsNullOrWhiteSpace(line))
+                {
+                    TranscriptPanel.Children.Add(new Border { Height = 6 });
                     continue;
+                }
 
-                var tb = new TextBlock
+                var (timestamp, speaker) = ParseTranscriptLine(line);
+
+                var colorHex = line.StartsWith("=") || line.StartsWith("Meeting") || line.StartsWith("Duration")
+                    ? "#888888"
+                    : speaker != null
+                        ? SpeakerColors.TryGetValue(speaker, out var c) ? c : DefaultSpeakerColor
+                        : "#E0E0E0";
+                var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorHex));
+
+                // Row: [play button gutter] [selectable text]
+                var row = new Grid { Tag = timestamp };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(20) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                // Play button in gutter (green triangle, like VS breakpoint area)
+                if (timestamp.HasValue)
+                {
+                    var playBtn = new Button
+                    {
+                        Content = "\u25B6", // ▶
+                        FontSize = 8,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0x4C, 0xAF, 0x50)),
+                        Background = Brushes.Transparent,
+                        BorderThickness = new Thickness(0),
+                        Padding = new Thickness(0),
+                        Cursor = Cursors.Hand,
+                        VerticalAlignment = VerticalAlignment.Top,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 3, 0, 0),
+                        Tag = timestamp,
+                        ToolTip = "Play from here",
+                    };
+                    playBtn.Click += PlayFromTimestamp_Click;
+                    Grid.SetColumn(playBtn, 0);
+                    row.Children.Add(playBtn);
+                }
+
+                // Selectable, copyable text
+                var textBox = new TextBox
                 {
                     Text = line,
+                    IsReadOnly = true,
+                    BorderThickness = new Thickness(0),
+                    Background = Brushes.Transparent,
+                    Foreground = brush,
                     TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 2, 0, 2),
                     FontFamily = new FontFamily("Segoe UI"),
                     FontSize = 12,
-                    Cursor = Cursors.Hand
+                    Padding = new Thickness(0, 1, 0, 1),
+                    Margin = new Thickness(0),
+                    IsTabStop = false,
                 };
+                Grid.SetColumn(textBox, 1);
+                row.Children.Add(textBox);
 
-                // Parse timestamp and speaker from line format: "[HH:MM:SS] Speaker: text"
-                var (timestamp, speaker) = ParseTranscriptLine(line);
-                tb.Tag = timestamp;
-                tb.MouseLeftButtonDown += TranscriptLine_Click;
-
-                if (line.StartsWith("---"))
-                {
-                    tb.Foreground = new SolidColorBrush(
-                        (Color)ColorConverter.ConvertFromString(SeparatorColor));
-                    tb.Cursor = Cursors.Arrow;
-                    tb.MouseLeftButtonDown -= TranscriptLine_Click;
-                }
-                else if (speaker != null)
-                {
-                    var color = SpeakerColors.TryGetValue(speaker, out var c) ? c : DefaultSpeakerColor;
-                    tb.Foreground = new SolidColorBrush(
-                        (Color)ColorConverter.ConvertFromString(color));
-                }
-                else
-                {
-                    tb.Foreground = new SolidColorBrush(
-                        (Color)ColorConverter.ConvertFromString("#E0E0E0"));
-                }
-
-                TranscriptPanel.Children.Add(tb);
+                TranscriptPanel.Children.Add(row);
             }
         }
         catch (Exception ex)
@@ -289,6 +315,28 @@ public partial class StatusWindow : Window
                 Foreground = Brushes.Red,
                 FontFamily = new FontFamily("Segoe UI")
             });
+        }
+    }
+
+    private void PlayFromTimestamp_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: TimeSpan ts } && _player != null)
+        {
+            // Auto-pause recording
+            if (!_service.Paused)
+            {
+                _service.Paused = true;
+                _pausedByPlayback = true;
+            }
+
+            _player.Seek(ts);
+            if (!_player.IsPlaying)
+            {
+                _player.Play();
+                StartPositionTimer();
+                UpdatePlayPauseButton();
+            }
+            HighlightCurrentSegment();
         }
     }
 
@@ -535,6 +583,8 @@ public partial class StatusWindow : Window
         ChannelLoopback.IsChecked = true;
     }
 
+    private bool _pausedByPlayback;
+
     private void PlayPause_Click(object sender, RoutedEventArgs e)
     {
         if (_player == null) return;
@@ -543,9 +593,23 @@ public partial class StatusWindow : Window
         {
             _player.Pause();
             StopPositionTimer();
+
+            // Resume recording if we paused it
+            if (_pausedByPlayback)
+            {
+                _service.Paused = false;
+                _pausedByPlayback = false;
+            }
         }
         else
         {
+            // Auto-pause recording while playing back
+            if (!_service.Paused)
+            {
+                _service.Paused = true;
+                _pausedByPlayback = true;
+            }
+
             _player.Play();
             StartPositionTimer();
         }
@@ -638,29 +702,28 @@ public partial class StatusWindow : Window
         if (_player == null) return;
 
         var currentPos = _player.Position;
-        TextBlock? closest = null;
+        Grid? closestRow = null;
         double closestDiff = double.MaxValue;
 
         foreach (var child in TranscriptPanel.Children)
         {
-            if (child is TextBlock tb && tb.Tag is TimeSpan ts)
+            if (child is Grid row && row.Tag is TimeSpan ts)
             {
-                tb.FontWeight = FontWeights.Normal;
-                tb.Opacity = 0.7;
+                row.Background = Brushes.Transparent;
 
                 var diff = Math.Abs((currentPos - ts).TotalSeconds);
                 if (diff < closestDiff)
                 {
                     closestDiff = diff;
-                    closest = tb;
+                    closestRow = row;
                 }
             }
         }
 
-        if (closest != null)
+        if (closestRow != null)
         {
-            closest.FontWeight = FontWeights.SemiBold;
-            closest.Opacity = 1.0;
+            closestRow.Background = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF));
+            closestRow.BringIntoView();
         }
     }
 
@@ -669,6 +732,13 @@ public partial class StatusWindow : Window
         StopPositionTimer();
         _player?.Dispose();
         _player = null;
+
+        // Resume recording if we paused it for playback
+        if (_pausedByPlayback)
+        {
+            _service.Paused = false;
+            _pausedByPlayback = false;
+        }
     }
 
     // --- Action Buttons ---

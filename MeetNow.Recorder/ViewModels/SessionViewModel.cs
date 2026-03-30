@@ -53,6 +53,12 @@ public class SessionViewModel : BaseViewModel
 
     public bool HasTranscript => File.Exists(TranscriptPath);
 
+    public bool HasFailedChunks => FailedChunks > 0;
+
+    public bool IsTranscribing => Status != "recording"
+        && TotalChunks > 0
+        && TranscribedChunks + FailedChunks < TotalChunks;
+
     public string DisplayDate
     {
         get
@@ -239,6 +245,8 @@ public class SessionViewModel : BaseViewModel
 
         RefreshTranscriptionProgress();
         OnPropertyChanged(nameof(HasTranscript));
+        OnPropertyChanged(nameof(HasFailedChunks));
+        OnPropertyChanged(nameof(IsTranscribing));
         OnPropertyChanged(nameof(DisplayDate));
         OnPropertyChanged(nameof(ProgressText));
     }

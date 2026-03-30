@@ -174,12 +174,10 @@ class Watcher:
             return
 
         session = self._read_json(session_json)
-        if session.get("status") != "completed":
-            return
 
-        # Check if merged transcript already exists
-        merged_path = session_dir / "session_transcript.json"
-        if merged_path.exists():
+        # Check if transcript already exists
+        txt_path = session_dir / "transcript.txt"
+        if txt_path.exists():
             return
 
         # Check all chunks are in terminal state
