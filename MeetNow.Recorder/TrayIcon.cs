@@ -87,14 +87,23 @@ public class TrayIcon : IDisposable
 
     private void ShowStatusWindow()
     {
-        if (_statusWindow is { IsLoaded: true })
+        try
         {
-            _statusWindow.Activate();
-            return;
-        }
+            if (_statusWindow is { IsLoaded: true })
+            {
+                _statusWindow.Activate();
+                return;
+            }
 
-        _statusWindow = new StatusWindow(_service);
-        _statusWindow.Show();
+            _statusWindow = new StatusWindow(_service);
+            _statusWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to open StatusWindow");
+            MessageBox.Show($"Failed to open status window:\n{ex.Message}",
+                "MeetNow Recorder", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void OnExitClick(object sender, RoutedEventArgs e)
