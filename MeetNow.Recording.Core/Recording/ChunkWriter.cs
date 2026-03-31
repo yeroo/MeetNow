@@ -48,7 +48,7 @@ public class ChunkWriter
             SessionId = sessionId,
             StartTimeUtc = startTimeUtc,
             EndTimeUtc = endTimeUtc,
-            DurationSeconds = (endTimeUtc - startTimeUtc).TotalSeconds,
+            DurationSeconds = loopbackSamples.Length / (double)AudioFormat.SampleRate,
             LoopbackFile = loopbackFile,
             MicFile = micFile,
             VadStats = new VadStats
