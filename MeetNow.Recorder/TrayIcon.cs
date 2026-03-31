@@ -89,18 +89,22 @@ public class TrayIcon : IDisposable
     {
         try
         {
-            if (_statusWindow is { IsLoaded: true })
+            if (_statusWindow is { IsVisible: true })
             {
                 _statusWindow.Activate();
                 return;
             }
 
+            // Close old instance if it exists but isn't visible
+            _statusWindow?.Close();
             _statusWindow = new StatusWindow(_service);
             _statusWindow.Show();
+            _statusWindow.Activate();
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Failed to open StatusWindow");
+            _statusWindow = null;
             MessageBox.Show($"Failed to open status window:\n{ex.Message}",
                 "MeetNow Recorder", MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -108,25 +112,15 @@ public class TrayIcon : IDisposable
 
     private void OnExitClick(object sender, RoutedEventArgs e)
     {
-        if (_service.IsRecording)
-        {
-            var result = MessageBox.Show(
-                "A recording is in progress. Are you sure you want to exit?",
-                "MeetNow Recorder",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-
-            if (result != MessageBoxResult.Yes)
-                return;
-        }
-
+        // Shutdown immediately — session will be auto-completed on next startup
+        Log.Information("Exit requested");
         Application.Current.Shutdown();
     }
 
     private void OnStateChanged(RecorderState state)
     {
-        // Must update icon on UI thread
-        Application.Current.Dispatcher.Invoke(() =>
+        // Must update icon on UI thread — use InvokeAsync to avoid deadlocks
+        Application.Current?.Dispatcher.InvokeAsync(() =>
         {
             if (_service.Paused) return; // Don't update icons while paused
 
@@ -154,7 +148,7 @@ public class TrayIcon : IDisposable
 
     private void OnChunkFlushed(int chunkIndex, string sessionId)
     {
-        Application.Current?.Dispatcher.Invoke(() =>
+        Application.Current?.Dispatcher.InvokeAsync(() =>
         {
             if (_service.IsRecording)
                 _taskbarIcon.ToolTipText = $"MeetNow Recorder — Recording (chunk {chunkIndex})";

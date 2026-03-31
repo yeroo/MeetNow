@@ -59,6 +59,7 @@ namespace MeetNow
             // Always initialize WebViews — TeamsAutomation is needed regardless of user-facing settings
             InitializeWebViewManager();
             _meetingAggregator = new MeetingDataAggregator();
+            MeetingCountdownOverlay.Initialize(_meetingAggregator);
             SystemEvents.PowerModeChanged += OnPowerChange;
 #if DEBUG
             var contextMenu = tb.ContextMenu;

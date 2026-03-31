@@ -296,16 +296,26 @@ namespace MeetNow
         {
             if (string.IsNullOrEmpty(teamsUrl)) return;
 
-            // Use the HTTPS URL directly — new Teams 2.0 handles it via the browser redirect
-            // which triggers the ms-teams: protocol handler correctly.
-            // The msteams: protocol conversion doesn't work reliably with new Teams.
-            var launchUrl = teamsUrl;
-            Log.Information("Opening Teams meeting: {Url}", launchUrl);
-            Process.Start(new ProcessStartInfo
+            // Validate it's an actual URL, not garbage like "teams-meeting"
+            if (!teamsUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
-                FileName = launchUrl,
-                UseShellExecute = true
-            });
+                Log.Warning("Invalid Teams URL, skipping: {Url}", teamsUrl);
+                return;
+            }
+
+            Log.Information("Opening Teams meeting: {Url}", teamsUrl);
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = teamsUrl,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to open Teams meeting URL: {Url}", teamsUrl);
+            }
         }
 
     }
