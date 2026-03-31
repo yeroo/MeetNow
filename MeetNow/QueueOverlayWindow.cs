@@ -15,6 +15,8 @@ namespace MeetNow
         private static QueueOverlayWindow? _window;
         private static bool _popupsHidden;
 
+        public static double WindowHeight => _window?.ActualHeight ?? 0;
+
         public static void Initialize()
         {
             TeamsOperationQueue.QueueChanged += OnQueueChanged;
