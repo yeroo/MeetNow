@@ -57,9 +57,12 @@ namespace MeetNow
             var panel = new MeetingPanelWindow(events);
             panel.Show();
 
-            // Start repeating sound
-            StartRepeatingSound();
-            VolumeMonitor.Start();
+            // Start repeating sound only when autopilot is active
+            if (AutopilotOverlay.IsActive)
+            {
+                StartRepeatingSound();
+                VolumeMonitor.Start();
+            }
         }
 
         public static void JoinFirstMeeting()

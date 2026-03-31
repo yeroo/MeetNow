@@ -56,11 +56,8 @@ namespace MeetNow
             SetupTimer();
             StartTeamsMonitor();
             QueueOverlay.Initialize();
-            if (MeetNowSettings.Instance.ShowTeamsWebView
-                || MeetNowSettings.Instance.OutlookSource == "WebView")
-            {
-                InitializeWebViewManager();
-            }
+            // Always initialize WebViews — TeamsAutomation is needed regardless of user-facing settings
+            InitializeWebViewManager();
             _meetingAggregator = new MeetingDataAggregator();
             SystemEvents.PowerModeChanged += OnPowerChange;
 #if DEBUG
