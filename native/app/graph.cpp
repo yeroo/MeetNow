@@ -56,7 +56,9 @@ CalendarViewResult fetchCalendarView(const std::string& accessToken,
     std::wstring url =
         L"https://graph.microsoft.com/v1.0/me/calendarView?startDateTime=" + fromIsoUtc +
         L"&endDateTime=" + toIsoUtc +
-        L"&$top=50&$select=subject,start,end,isAllDay,isCancelled,onlineMeeting,onlineMeetingUrl,bodyPreview";
+        // isOnlineMeeting is never read, but Graph leaves onlineMeeting null
+        // unless it is also selected (verified against the EPAM tenant).
+        L"&$top=50&$select=subject,start,end,isAllDay,isCancelled,isOnlineMeeting,onlineMeeting,onlineMeetingUrl,bodyPreview";
     const std::vector<std::wstring> headers = {
         L"Authorization: Bearer " + widen(accessToken),
         L"Accept: application/json",
