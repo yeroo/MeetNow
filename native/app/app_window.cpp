@@ -1,0 +1,208 @@
+#include "app_window.h"
+#include "auth.h"
+#include "keep_awake.h"
+#include "tray.h"
+#include <objbase.h>
+#include <shellapi.h>
+
+namespace mn {
+
+namespace {
+
+constexpr wchar_t kMainClass[] = L"MeetNowMain";
+
+constexpr UINT WM_APP_TRAY = WM_APP + 1;
+constexpr UINT WM_APP_REFRESHED = WM_APP + 2;  // lParam: heap RefreshResult*
+constexpr UINT WM_APP_AUTH_DONE = WM_APP + 3;  // wParam: success
+
+// Intervals from the C# app: OUTLOOK_TIMER_INTERVAL_MINUTES = 15, overlay
+// query/render timers 30 s, ScreenLockPrevention timer 60 s.
+constexpr UINT_PTR kRefreshTimer = 1;
+constexpr UINT kRefreshIntervalMs = 15 * 60 * 1000;
+constexpr UINT_PTR kOverlayTimer = 2;
+constexpr UINT kOverlayIntervalMs = 30 * 1000;
+constexpr UINT_PTR kKeepAwakeTimer = 3;
+constexpr UINT kKeepAwakeIntervalMs = 60 * 1000;
+
+struct ThreadArgs {
+    HWND hwnd;
+    Settings settings;
+};
+
+DWORD WINAPI refreshThread(void* param) {
+    ThreadArgs* args = (ThreadArgs*)param;
+    auto* result = new RefreshResult(refreshCalendar(args->settings));
+    if (!PostMessageW(args->hwnd, WM_APP_REFRESHED, 0, (LPARAM)result)) delete result;
+    delete args;
+    return 0;
+}
+
+DWORD WINAPI authThread(void* param) {
+    ThreadArgs* args = (ThreadArgs*)param;
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const TokenSet t = acquireTokenInteractive(args->settings, nullptr);
+    PostMessageW(args->hwnd, WM_APP_AUTH_DONE, t.empty() ? 0 : 1, 0);
+    CoUninitialize();
+    delete args;
+    return 0;
+}
+
+void startThread(App* app, LPTHREAD_START_ROUTINE proc) {
+    HANDLE h = CreateThread(nullptr, 0, proc, new ThreadArgs{ app->hwnd, app->settings }, 0, nullptr);
+    if (h) CloseHandle(h);
+}
+
+void startRefresh(App* app) {
+    if (app->refreshInFlight || app->authInFlight) return;
+    app->refreshInFlight = true;
+    startThread(app, refreshThread);
+}
+
+void startSignIn(App* app) {
+    if (app->authInFlight) return;
+    app->authInFlight = true;
+    startThread(app, authThread);
+}
+
+void onRefreshed(App* app, RefreshResult* result) {
+    app->refreshInFlight = false;
+    switch (result->status) {
+    case RefreshStatus::Ok:
+        app->signInNeeded = false;
+        app->meetings = std::move(result->meetings);
+        app->overlay.update(app->meetings);
+        break;
+    case RefreshStatus::AuthRequired:
+        app->signInNeeded = true;
+        // First run (or a revoked grant): open the browser sign-in once
+        // without being asked — the tray-menu "Sign in…" covers retries.
+        if (!app->autoSignInAttempted) {
+            app->autoSignInAttempted = true;
+            startSignIn(app);
+        }
+        break;
+    case RefreshStatus::Error:
+        break;  // keep showing the last good data; next timer tick retries
+    }
+    delete result;
+}
+
+void onTray(App* app, LPARAM lParam) {
+    // NOTIFYICON_VERSION_4 packs the event in LOWORD(lParam).
+    const UINT event = LOWORD(lParam);
+    if (event != WM_CONTEXTMENU && event != WM_RBUTTONUP) return;
+
+    const TrayMenuResult r = showTrayMenu(app->hwnd, app->meetings, app->signInNeeded);
+    switch (r.action) {
+    case TrayAction::Exit:
+        DestroyWindow(app->hwnd);
+        break;
+    case TrayAction::SignIn:
+        startSignIn(app);
+        break;
+    case TrayAction::Join:
+        // OutlookHelper.StartTeamsMeeting: ShellExecute the URL, https only.
+        if (r.joinUrl.rfind(L"https://", 0) == 0)
+            ShellExecuteW(nullptr, L"open", r.joinUrl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        break;
+    case TrayAction::None:
+        break;
+    }
+}
+
+LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    App* app = (App*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (app) {
+        switch (msg) {
+        case WM_TIMER:
+            if (wParam == kRefreshTimer) startRefresh(app);
+            else if (wParam == kOverlayTimer) app->overlay.update(app->meetings);
+            else if (wParam == kKeepAwakeTimer) keepAwakeTick();
+            return 0;
+        case WM_APP_TRAY:
+            onTray(app, lParam);
+            return 0;
+        case WM_APP_REFRESHED:
+            onRefreshed(app, (RefreshResult*)lParam);
+            return 0;
+        case WM_APP_AUTH_DONE:
+            app->authInFlight = false;
+            if (wParam) {
+                app->signInNeeded = false;
+                startRefresh(app);
+            }
+            return 0;
+        case WM_POWERBROADCAST:
+            // Refresh right after wake, like the PowerModeChanged.Resume
+            // handler resetting the timer to fire immediately.
+            if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND)
+                startRefresh(app);
+            return TRUE;
+        case WM_DESTROY:
+            trayRemove(hwnd);
+            keepAwakeStop();
+            app->overlay.destroy();
+            PostQuitMessage(0);
+            return 0;
+        default:
+            if (msg == app->taskbarCreatedMsg && app->taskbarCreatedMsg != 0) {
+                trayReAdd(hwnd, WM_APP_TRAY);
+                return 0;
+            }
+        }
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+} // namespace
+
+App* createAppWindow(HINSTANCE inst) {
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = mainProc;
+    wc.hInstance = inst;
+    wc.lpszClassName = kMainClass;
+    if (!RegisterClassExW(&wc)) return nullptr;
+
+    // Message-only would be simpler, but such windows never receive the
+    // TaskbarCreated broadcast or WM_POWERBROADCAST — so this is a normal
+    // top-level window that just never gets shown.
+    HWND hwnd = CreateWindowExW(0, kMainClass, L"MeetNow", WS_OVERLAPPED, 0, 0, 0, 0,
+                                nullptr, nullptr, inst, nullptr);
+    if (!hwnd) return nullptr;
+
+    App* app = new App();
+    app->hwnd = hwnd;
+    app->settings = loadSettings();
+    app->taskbarCreatedMsg = RegisterWindowMessageW(L"TaskbarCreated");
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)app);
+
+    // Offline-first startup like lookxy: last fetched window from disk, so
+    // the menu and overlay are populated before the first Graph roundtrip.
+    app->meetings = loadCalendarCache();
+
+    if (!app->overlay.init(inst)) {
+        // Overlay loss is not fatal — tray + keep-awake still work.
+    }
+    trayAdd(hwnd, WM_APP_TRAY);
+    keepAwakeStart();
+    app->overlay.update(app->meetings);
+
+    SetTimer(hwnd, kRefreshTimer, kRefreshIntervalMs, nullptr);
+    SetTimer(hwnd, kOverlayTimer, kOverlayIntervalMs, nullptr);
+    SetTimer(hwnd, kKeepAwakeTimer, kKeepAwakeIntervalMs, nullptr);
+    startRefresh(app);  // C# timer's first tick was immediate
+
+    return app;
+}
+
+int runMessageLoop() {
+    MSG msg;
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    return (int)msg.wParam;
+}
+
+} // namespace mn

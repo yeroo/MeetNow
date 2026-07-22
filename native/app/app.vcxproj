@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{4E2D9C71-8F5A-4D3B-A6E0-1B7C2F9D8A34}</ProjectGuid>
+    <RootNamespace>MeetNow</RootNamespace>
+    <ProjectName>MeetNow</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <TargetName>MeetNow</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalDependencies>user32.lib;gdi32.lib;shell32.lib;advapi32.lib;ole32.lib;shlwapi.lib;d2d1.lib;dwrite.lib;winhttp.lib;ws2_32.lib;bcrypt.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <ClCompile>
+      <SDLCheck>true</SDLCheck>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+    </Link>
+    <ClCompile>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="json.cpp" />
+    <ClCompile Include="settings.cpp" />
+    <ClCompile Include="pkce.cpp" />
+    <ClCompile Include="http.cpp" />
+    <ClCompile Include="auth.cpp" />
+    <ClCompile Include="graph.cpp" />
+    <ClCompile Include="calendar.cpp" />
+    <ClCompile Include="keep_awake.cpp" />
+    <ClCompile Include="tray.cpp" />
+    <ClCompile Include="overlay.cpp" />
+    <ClCompile Include="app_window.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="str.h" />
+    <ClInclude Include="json.h" />
+    <ClInclude Include="settings.h" />
+    <ClInclude Include="pkce.h" />
+    <ClInclude Include="http.h" />
+    <ClInclude Include="auth.h" />
+    <ClInclude Include="graph.h" />
+    <ClInclude Include="calendar.h" />
+    <ClInclude Include="keep_awake.h" />
+    <ClInclude Include="tray.h" />
+    <ClInclude Include="overlay.h" />
+    <ClInclude Include="app_window.h" />
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="app.rc" />
+    <Manifest Include="app.manifest" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
