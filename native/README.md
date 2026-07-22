@@ -45,10 +45,14 @@ Optional `settings.json` overrides (read-only, same folder):
 
 ```powershell
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+$msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild `
     -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
 & $msbuild native\MeetNow.sln /p:Configuration=Release /p:Platform=x64 /m
 ```
+
+The toolset is pinned to v145, so a VS 2026 instance (Build Tools is
+enough) with the C++ workload must be installed; `-products *` makes
+vswhere consider Build Tools instances too.
 
 Output: `native\x64\Release\MeetNow.exe` — one statically linked exe
 (~300 KB), C++20, Unicode, Windows-SDK libraries only, no exceptions, no
