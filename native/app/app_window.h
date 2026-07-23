@@ -1,6 +1,7 @@
 #pragma once
 #include "calendar.h"
 #include "overlay.h"
+#include "popup.h"
 #include "settings.h"
 #include <windows.h>
 #include <vector>
@@ -16,6 +17,10 @@ struct App {
     Settings settings;
     std::vector<Meeting> meetings;
     Overlay overlay;
+    Popup popup;
+    // Start times (UTC ticks) already popped up, so a popup that was
+    // dismissed or auto-closed never reappears for the same slot.
+    std::vector<unsigned long long> popupShownStarts;
     bool signInNeeded = false;        // tray menu offers "Sign in…"
     bool refreshInFlight = false;
     bool authInFlight = false;

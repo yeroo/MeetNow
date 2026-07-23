@@ -23,6 +23,14 @@ constexpr UINT_PTR kOverlayTimer = 2;
 constexpr UINT kOverlayIntervalMs = 30 * 1000;
 constexpr UINT_PTR kKeepAwakeTimer = 3;
 constexpr UINT kKeepAwakeIntervalMs = 60 * 1000;
+// 1 s so the join popup appears at the meeting's start time, not up to
+// 30 s late like the overlay tick would allow (SchedulePopup in the C#
+// app fired to the second via FluentScheduler).
+constexpr UINT_PTR kPopupTimer = 4;
+constexpr UINT kPopupIntervalMs = 1000;
+// The popup covers [start, start+5 min): shown when start passes, auto-
+// closed 5 min in — SchedulePopup / SchedulePopupClose(start.AddMinutes(5)).
+constexpr unsigned long long kPopupWindowTicks = 5 * kTicksPerMinute;
 
 struct ThreadArgs {
     HWND hwnd;
@@ -87,6 +95,31 @@ void onRefreshed(App* app, RefreshResult* result) {
     delete result;
 }
 
+void popupTick(App* app) {
+    const unsigned long long now = nowUtc();
+    app->popup.tick(now);  // auto-close at start + 5 min
+
+    // Meetings inside their popup window that haven't been popped yet.
+    std::vector<Meeting> due;
+    unsigned long long earliestStart = 0;
+    for (const auto& m : app->meetings) {
+        if (m.startUtc > now || now >= m.startUtc + kPopupWindowTicks || m.endUtc <= now)
+            continue;
+        bool shown = false;
+        for (const auto s : app->popupShownStarts) shown = shown || s == m.startUtc;
+        if (shown) continue;
+        due.push_back(m);
+        if (earliestStart == 0 || m.startUtc < earliestStart) earliestStart = m.startUtc;
+    }
+    if (due.empty()) return;
+
+    for (const auto& m : due) app->popupShownStarts.push_back(m.startUtc);
+    // Drop marks older than a day so the list can't grow unbounded.
+    std::erase_if(app->popupShownStarts,
+                  [now](unsigned long long s) { return s + kTicksPerDay < now; });
+    app->popup.show(due, earliestStart + kPopupWindowTicks);
+}
+
 void onTray(App* app, LPARAM lParam) {
     // NOTIFYICON_VERSION_4 packs the event in LOWORD(lParam).
     const UINT event = LOWORD(lParam);
@@ -118,6 +151,7 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (wParam == kRefreshTimer) startRefresh(app);
             else if (wParam == kOverlayTimer) app->overlay.update(app->meetings);
             else if (wParam == kKeepAwakeTimer) keepAwakeTick();
+            else if (wParam == kPopupTimer) popupTick(app);
             return 0;
         case WM_APP_TRAY:
             onTray(app, lParam);
@@ -142,6 +176,7 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             trayRemove(hwnd);
             keepAwakeStop();
             app->overlay.destroy();
+            app->popup.destroy();
             PostQuitMessage(0);
             return 0;
         default:
@@ -184,6 +219,9 @@ App* createAppWindow(HINSTANCE inst) {
     if (!app->overlay.init(inst)) {
         // Overlay loss is not fatal — tray + keep-awake still work.
     }
+    if (!app->popup.init(inst)) {
+        // Same stance: no popup is a degraded mode, not a startup failure.
+    }
     trayAdd(hwnd, WM_APP_TRAY);
     keepAwakeStart();
     app->overlay.update(app->meetings);
@@ -191,6 +229,10 @@ App* createAppWindow(HINSTANCE inst) {
     SetTimer(hwnd, kRefreshTimer, kRefreshIntervalMs, nullptr);
     SetTimer(hwnd, kOverlayTimer, kOverlayIntervalMs, nullptr);
     SetTimer(hwnd, kKeepAwakeTimer, kKeepAwakeIntervalMs, nullptr);
+    SetTimer(hwnd, kPopupTimer, kPopupIntervalMs, nullptr);
+    // Starting the app inside a meeting's popup window pops immediately,
+    // like FluentScheduler firing an overdue ToRunOnceAt job on schedule.
+    popupTick(app);
     startRefresh(app);  // C# timer's first tick was immediate
 
     return app;
