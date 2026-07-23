@@ -8,7 +8,7 @@
 ;  - This and all future Inno versions share AppId, so they upgrade in
 ;    place over each other.
 
-#define MyAppVersion "2.1.0"
+#define MyAppVersion "2.1.1"
 #define MyAppExe "MeetNow.exe"
 ; ProductCode of the 1.0.0 MSI (extracted from the shipped Installer.exe).
 #define OldMsiProductCode "{8C041E07-9421-4959-870E-EEC892DF1FB6}"
@@ -27,9 +27,10 @@ SetupIconFile=..\native\app\app.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-; The app holds this mutex; setup warns the user to close it when running
-; interactively (silent installs handle it in PrepareToInstall).
-AppMutex=MeetNow_SingleInstance_B7A3F2
+; No AppMutex on purpose: its close-the-app prompt runs BEFORE
+; PrepareToInstall, and /SUPPRESSMSGBOXES answers it with Cancel — so
+; silent upgrades over a running app abort with exit code 1 before the
+; taskkill below can run. PrepareToInstall closes the app instead.
 UninstallDisplayIcon={app}\{#MyAppExe}
 
 [Tasks]
