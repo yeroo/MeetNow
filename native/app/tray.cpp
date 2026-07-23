@@ -50,13 +50,14 @@ void trayReAdd(HWND owner, UINT callbackMsg) {
 TrayMenuResult showTrayMenu(HWND owner, const std::vector<Meeting>& meetings, bool offerSignIn) {
     TrayMenuResult result;
 
-    // Today's meetings that haven't started yet (mirrors RefreshOutlook's
-    // now < meeting.Start filter; "today" via local calendar date).
+    // Today's meetings that haven't ENDED yet: in-progress ones stay listed
+    // until endUtc as a late-join/reconnect point (the C# app dropped them
+    // at start, which left no way back in).
     SYSTEMTIME today = toLocal(nowUtc());
     const unsigned long long now = nowUtc();
     std::vector<const Meeting*> upcoming;
     for (const auto& m : meetings) {
-        if (m.startUtc <= now) continue;
+        if (m.endUtc <= now) continue;
         const SYSTEMTIME local = toLocal(m.startUtc);
         if (local.wYear == today.wYear && local.wMonth == today.wMonth && local.wDay == today.wDay)
             upcoming.push_back(&m);
@@ -73,9 +74,10 @@ TrayMenuResult showTrayMenu(HWND owner, const std::vector<Meeting>& meetings, bo
             // _TRUNCATE: a >500-char subject must clip, not trip the CRT
             // invalid-parameter handler.
             wchar_t label[512];
-            _snwprintf_s(label, _TRUNCATE, L"%02u:%02u: %s", local.wHour, local.wMinute,
+            _snwprintf_s(label, _TRUNCATE, L"%02u:%02u: %s%s", local.wHour, local.wMinute,
                          upcoming[i]->subject.empty() ? L"(no subject)"
-                                                      : upcoming[i]->subject.c_str());
+                                                      : upcoming[i]->subject.c_str(),
+                         upcoming[i]->startUtc <= now ? L"  (now)" : L"");
             // Meetings without a join URL are informational only.
             const UINT flags = MF_STRING | (upcoming[i]->joinUrl.empty() ? MF_GRAYED : 0);
             AppendMenuW(menu, flags, kCmdMeetingFirst + i, label);

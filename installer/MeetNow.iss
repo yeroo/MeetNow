@@ -8,7 +8,7 @@
 ;  - This and all future Inno versions share AppId, so they upgrade in
 ;    place over each other.
 
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "2.1.0"
 #define MyAppExe "MeetNow.exe"
 ; ProductCode of the 1.0.0 MSI (extracted from the shipped Installer.exe).
 #define OldMsiProductCode "{8C041E07-9421-4959-870E-EEC892DF1FB6}"

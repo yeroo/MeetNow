@@ -138,13 +138,13 @@ bool Overlay::init(HINSTANCE inst) {
 void Overlay::update(const std::vector<Meeting>& meetings) {
     if (!hwnd_ || !d2d_) return;
 
-    // Starts within 2 hours and hasn't started yet — the C# filter
-    // (m.Start > now && m.Start <= now.AddHours(2)); rows whose countdown
-    // went negative between ticks are dropped by the same comparison.
+    // Starts within 2 hours or is in progress — unlike the C# filter
+    // (m.Start > now), a running meeting stays on screen until endUtc so a
+    // late join is still prompted; its row switches to an "ends in" count.
     const unsigned long long now = nowUtc();
     std::vector<const Meeting*> upcoming;
     for (const auto& m : meetings)
-        if (m.startUtc > now && m.startUtc <= now + 2 * kTicksPerHour)
+        if (m.endUtc > now && m.startUtc <= now + 2 * kTicksPerHour)
             upcoming.push_back(&m);
 
     if (upcoming.empty()) {
@@ -177,18 +177,24 @@ void Overlay::render(const std::vector<const Meeting*>& upcoming) {
         wchar_t timeStr[8];
         swprintf_s(timeStr, L"%02u:%02u", local.wHour, local.wMinute);
 
-        const unsigned long long remaining = m.startUtc - now;
+        const bool started = m.startUtc <= now;
+        // Upcoming rows count down to start; in-progress rows count down to
+        // the end (endUtc > now is guaranteed by the update() filter).
+        const unsigned long long remaining = started ? m.endUtc - now : m.startUtc - now;
         const unsigned long long totalSeconds = remaining / kTicksPerSecond;
         const unsigned long long totalMinutes = totalSeconds / 60;
         wchar_t cdStr[32];
+        const wchar_t* prefix = started ? L"ends in" : L"in";
         if (totalMinutes >= 60) {
-            swprintf_s(cdStr, L"in %llu:%02llu:%02llu", totalMinutes / 60, totalMinutes % 60,
-                       totalSeconds % 60);
+            swprintf_s(cdStr, L"%s %llu:%02llu:%02llu", prefix, totalMinutes / 60,
+                       totalMinutes % 60, totalSeconds % 60);
         } else {
-            swprintf_s(cdStr, L"in %llu:%02llu", totalMinutes, totalSeconds % 60);
+            swprintf_s(cdStr, L"%s %llu:%02llu", prefix, totalMinutes, totalSeconds % 60);
         }
-        // Countdown urgency colors: red <= 5 min, yellow <= 15 min, gray else.
-        const D2D1_COLOR_F cdColor = totalSeconds <= 5 * 60    ? rgb(255, 100, 100)
+        // Countdown urgency colors: red <= 5 min, yellow <= 15 min, gray
+        // else; in-progress rows stay red — the pressure is to join late.
+        const D2D1_COLOR_F cdColor = started                   ? rgb(255, 100, 100)
+                                     : totalSeconds <= 5 * 60  ? rgb(255, 100, 100)
                                      : totalSeconds <= 15 * 60 ? rgb(255, 200, 60)
                                                                : rgb(120, 120, 120);
 
