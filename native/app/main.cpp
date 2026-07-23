@@ -13,8 +13,9 @@ using namespace mn;
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"MeetNow_SingleInstance_B7A3F2");
     if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) {
-        MessageBoxW(nullptr, L"MeetNow is already running.", L"MeetNow",
-                    MB_ICONINFORMATION | MB_OK);
+        // Exit silently: a modal "already running" box leaves a second
+        // MeetNow.exe lingering in Task Manager until someone clicks OK,
+        // which reads as a two-instances bug during upgrades/relaunches.
         return 0;
     }
 
