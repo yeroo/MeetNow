@@ -1,4 +1,5 @@
 #pragma once
+#include <windows.h>
 #include <string>
 
 namespace mn {
@@ -19,6 +20,22 @@ struct Settings {
 };
 
 Settings loadSettings();
+
+// User-chosen overlay/popup positions, dragged via the hover grip
+// (grip.cpp). Stored as the corner each window is anchored to — top-right
+// for the countdown overlay, bottom-right for the join popup — so content
+// resizes keep the dragged corner put. Absent fields = default corner.
+struct Layout {
+    bool hasOverlay = false;
+    POINT overlayTopRight{};
+    bool hasPopup = false;
+    POINT popupBottomRight{};
+};
+
+// layout.json in settingsDir(); unlike settings.json this file is OWNED by
+// the native app (written on every drag end).
+Layout loadLayout();
+bool saveLayout(const Layout& l);
 
 // Shared file helpers (BrowserSelect settings.cpp/cache.cpp patterns):
 // whole-file read with a 64 MB sanity cap, and atomic write via .tmp+rename.

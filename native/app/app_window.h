@@ -1,5 +1,6 @@
 #pragma once
 #include "calendar.h"
+#include "grip.h"
 #include "overlay.h"
 #include "popup.h"
 #include "settings.h"
@@ -18,6 +19,9 @@ struct App {
     std::vector<Meeting> meetings;
     Overlay overlay;
     Popup popup;
+    DragGrip overlayGrip;   // hover handles that drag the two windows
+    DragGrip popupGrip;
+    Layout layout;          // dragged anchors, persisted in layout.json
     // Start times (UTC ticks) already popped up, so a popup that was
     // dismissed or auto-closed never reappears for the same slot.
     std::vector<unsigned long long> popupShownStarts;

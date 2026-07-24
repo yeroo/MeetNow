@@ -64,4 +64,40 @@ Settings loadSettings() {
     return s;
 }
 
+namespace {
+std::wstring layoutPath() { return settingsDir() + L"\\layout.json"; }
+} // namespace
+
+Layout loadLayout() {
+    Layout l;
+    const auto root = json::parse(readFileBytes(layoutPath()));
+    if (!root || root->type != json::Type::Object) return l;
+    // Both coordinates of a corner must be present for it to count.
+    if (root->get(L"overlayRight") && root->get(L"overlayTop")) {
+        l.hasOverlay = true;
+        l.overlayTopRight = { (LONG)root->getNumber(L"overlayRight"),
+                              (LONG)root->getNumber(L"overlayTop") };
+    }
+    if (root->get(L"popupRight") && root->get(L"popupBottom")) {
+        l.hasPopup = true;
+        l.popupBottomRight = { (LONG)root->getNumber(L"popupRight"),
+                               (LONG)root->getNumber(L"popupBottom") };
+    }
+    return l;
+}
+
+bool saveLayout(const Layout& l) {
+    auto root = json::Value::makeObject();
+    if (l.hasOverlay) {
+        root->set(L"overlayRight", json::Value::makeNumber((double)l.overlayTopRight.x));
+        root->set(L"overlayTop", json::Value::makeNumber((double)l.overlayTopRight.y));
+    }
+    if (l.hasPopup) {
+        root->set(L"popupRight", json::Value::makeNumber((double)l.popupBottomRight.x));
+        root->set(L"popupBottom", json::Value::makeNumber((double)l.popupBottomRight.y));
+    }
+    const std::string out = json::serializeIndented(root);
+    return writeFileAtomic(layoutPath(), out.data(), out.size());
+}
+
 } // namespace mn

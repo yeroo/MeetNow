@@ -326,13 +326,15 @@ void Popup::render() {
     }
 
     if (drawn) {
-        // Bottom-right of the primary work area, 20 DIPs off both edges —
-        // just above the system tray (WorkArea excludes the taskbar).
+        // Dragged anchor when set, else bottom-right of the primary work
+        // area, 20 DIPs off both edges — just above the system tray
+        // (WorkArea excludes the taskbar).
         MONITORINFO mi{ sizeof(mi) };
         POINT origin{ 0, 0 };
         GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi);
         POINT dst{ mi.rcWork.right - width - (int)(metrics::kEdgeMargin * scale),
                    mi.rcWork.bottom - height - (int)(metrics::kEdgeMargin * scale) };
+        if (customPos_) dst = { anchor_.x - width, anchor_.y - height };
         POINT src{ 0, 0 };
         SIZE size{ width, height };
         BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };

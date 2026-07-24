@@ -19,6 +19,15 @@ public:
     // result). Call every ~30 s and after every calendar refresh.
     void update(const std::vector<Meeting>& meetings);
 
+    // Drag support (grip.cpp): anchor is the TOP-RIGHT corner the badge
+    // hangs from, so content growing/shrinking never moves that corner.
+    // Without a custom anchor the work-area default applies.
+    void setAnchor(POINT topRight) { customPos_ = true; anchor_ = topRight; }
+    HWND handle() const { return hwnd_; }
+    bool getRect(RECT* r) const {
+        return hwnd_ && IsWindowVisible(hwnd_) && GetWindowRect(hwnd_, r);
+    }
+
     void destroy();
 
 private:
@@ -26,6 +35,8 @@ private:
 
     HWND hwnd_ = nullptr;
     HINSTANCE inst_ = nullptr;
+    bool customPos_ = false;
+    POINT anchor_{};
     struct D2d;      // COM objects live in the .cpp so this header stays SDK-light
     D2d* d2d_ = nullptr;
 };

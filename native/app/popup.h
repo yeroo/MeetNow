@@ -23,6 +23,14 @@ public:
     void close();
     void destroy();
 
+    // Drag support (grip.cpp): anchored by its BOTTOM-RIGHT corner (the
+    // corner nearest its default spot above the tray).
+    void setAnchor(POINT bottomRight) { customPos_ = true; anchor_ = bottomRight; }
+    HWND handle() const { return hwnd_; }
+    bool getRect(RECT* r) const {
+        return hwnd_ && IsWindowVisible(hwnd_) && GetWindowRect(hwnd_, r);
+    }
+
 private:
     struct D2d;
     struct Hit;  // clickable region: a Join row's URL or the Dismiss button
@@ -34,6 +42,8 @@ private:
 
     HINSTANCE inst_ = nullptr;
     HWND hwnd_ = nullptr;
+    bool customPos_ = false;
+    POINT anchor_{};
     D2d* d2d_ = nullptr;
     std::vector<Meeting> meetings_;
     std::vector<Hit>* hits_ = nullptr;
