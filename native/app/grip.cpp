@@ -42,7 +42,7 @@ bool DragGrip::init(HINSTANCE inst, HWND notifyWnd, UINT notifyMsg, WPARAM id) {
     return true;
 }
 
-void DragGrip::showFor(HWND host) {
+void DragGrip::showFor(HWND host, int extraLeftGapPx) {
     if (!hwnd_ || !host) return;
     RECT hr{};
     if (!GetWindowRect(host, &hr)) return;
@@ -53,9 +53,9 @@ void DragGrip::showFor(HWND host) {
     const float scale = (float)GetDpiForWindow(host) / 96.f;
     const int width = (int)(kGripW * scale + 0.5f);
     const int height = hr.bottom - hr.top;
-    // Flush with the host's left edge; overlap it when the strip would
-    // leave the screen on the far left.
-    int x = hr.left - width;
+    // Flush with the host's left edge (or its other companion strip);
+    // overlap the host when that would leave the screen on the far left.
+    int x = hr.left - width - extraLeftGapPx;
     if (x < GetSystemMetrics(SM_XVIRTUALSCREEN)) x = hr.left;
 
     render(width, height);

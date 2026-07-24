@@ -1,10 +1,12 @@
 #pragma once
 #include "calendar.h"
+#include "dismiss.h"
 #include "grip.h"
 #include "overlay.h"
 #include "popup.h"
 #include "settings.h"
 #include <windows.h>
+#include <utility>
 #include <vector>
 
 namespace mn {
@@ -21,7 +23,12 @@ struct App {
     Popup popup;
     DragGrip overlayGrip;   // hover handles that drag the two windows
     DragGrip popupGrip;
+    DismissStrip dismissStrip;  // hover ✕-per-row column on the overlay
     Layout layout;          // dragged anchors, persisted in layout.json
+    // Meetings (startUtc, subject) discarded from the badge via the ✕
+    // strip. Session-scoped on purpose: a restart brings them back, and
+    // entries are pruned once the meeting leaves the calendar window.
+    std::vector<std::pair<unsigned long long, std::wstring>> overlayDismissed;
     // Start times (UTC ticks) already popped up, so a popup that was
     // dismissed or auto-closed never reappears for the same slot.
     std::vector<unsigned long long> popupShownStarts;

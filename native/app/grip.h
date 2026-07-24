@@ -19,8 +19,9 @@ public:
     bool init(HINSTANCE inst, HWND notifyWnd, UINT notifyMsg, WPARAM id);
 
     // Positions the strip against host's current rect and shows it.
-    // No-op when already visible for the same rect.
-    void showFor(HWND host);
+    // No-op when already visible for the same rect. extraLeftGapPx leaves
+    // room for another companion strip (the overlay's dismiss column).
+    void showFor(HWND host, int extraLeftGapPx = 0);
     void hide();
     void destroy();
 
