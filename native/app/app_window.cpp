@@ -15,6 +15,7 @@ constexpr UINT WM_APP_TRAY = WM_APP + 1;
 constexpr UINT WM_APP_REFRESHED = WM_APP + 2;  // lParam: heap RefreshResult*
 constexpr UINT WM_APP_AUTH_DONE = WM_APP + 3;  // wParam: success
 constexpr UINT WM_APP_GRIP_MOVED = WM_APP + 4; // wParam: kGripOverlay/kGripPopup
+constexpr UINT WM_APP_OVERLAY_DISMISS = WM_APP + 5;  // wParam: strip row index
 
 constexpr WPARAM kGripOverlay = 0;
 constexpr WPARAM kGripPopup = 1;
@@ -80,13 +81,32 @@ void startSignIn(App* app) {
     startThread(app, authThread);
 }
 
+// The badge's meeting list: everything except rows the user discarded
+// with the ✕ strip. Dismissals for meetings no longer in the calendar
+// window are pruned so the list can't grow across the day.
+std::vector<Meeting> overlayMeetings(App* app) {
+    std::erase_if(app->overlayDismissed, [app](const auto& d) {
+        for (const auto& m : app->meetings)
+            if (m.startUtc == d.first && m.subject == d.second) return false;
+        return true;
+    });
+    std::vector<Meeting> out;
+    for (const auto& m : app->meetings) {
+        bool dismissed = false;
+        for (const auto& d : app->overlayDismissed)
+            if (m.startUtc == d.first && m.subject == d.second) dismissed = true;
+        if (!dismissed) out.push_back(m);
+    }
+    return out;
+}
+
 void onRefreshed(App* app, RefreshResult* result) {
     app->refreshInFlight = false;
     switch (result->status) {
     case RefreshStatus::Ok:
         app->signInNeeded = false;
         app->meetings = std::move(result->meetings);
-        app->overlay.update(app->meetings);
+        app->overlay.update(overlayMeetings(app));
         break;
     case RefreshStatus::AuthRequired:
         app->signInNeeded = true;
@@ -149,11 +169,42 @@ void hoverFor(HWND host, bool hostVisible, const RECT& hostRect, DragGrip& grip,
 void hoverTick(App* app) {
     POINT cursor{};
     GetCursorPos(&cursor);
+
+    // Overlay: hover shows the ✕-per-row dismiss strip flush left of the
+    // badge, and the drag grip left of that.
     RECT r{};
-    bool vis = app->overlay.getRect(&r);
-    hoverFor(app->overlay.handle(), vis, r, app->overlayGrip, cursor);
-    vis = app->popup.getRect(&r);
+    if (app->overlayGrip.dragging()) {
+        app->dismissStrip.hide();  // realigned by the next tick after the drop
+    } else if (!app->overlay.getRect(&r)) {
+        app->dismissStrip.hide();
+        app->overlayGrip.hide();
+    } else {
+        bool over = PtInRect(&r, cursor) != 0;
+        RECT sr{};
+        if (!over && app->dismissStrip.getRect(&sr)) over = PtInRect(&sr, cursor) != 0;
+        if (!over && app->overlayGrip.getRect(&sr)) over = PtInRect(&sr, cursor) != 0;
+        if (over) {
+            app->dismissStrip.showFor(app->overlay.handle(), app->overlay.rows());
+            app->overlayGrip.showFor(app->overlay.handle(), app->dismissStrip.widthPx());
+        } else {
+            app->dismissStrip.hide();
+            app->overlayGrip.hide();
+        }
+    }
+
+    bool vis = app->popup.getRect(&r);
     hoverFor(app->popup.handle(), vis, r, app->popupGrip, cursor);
+}
+
+// An ✕ was clicked: discard that meeting from the badge for this session.
+void onOverlayDismiss(App* app, size_t rowIndex) {
+    unsigned long long startUtc = 0;
+    std::wstring subject;
+    if (!app->dismissStrip.rowKey(rowIndex, &startUtc, &subject)) return;
+    app->overlayDismissed.emplace_back(startUtc, subject);
+    app->dismissStrip.hide();  // rows changed; hover tick realigns everything
+    app->overlayGrip.hide();
+    app->overlay.update(overlayMeetings(app));
 }
 
 // A grip drag ended: re-anchor the host to its dragged corner and persist.
@@ -205,7 +256,7 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // A repaint or auto-close would yank the window mid-drag, so
             // both stand down while their grip is captured.
             else if (wParam == kOverlayTimer && !app->overlayGrip.dragging())
-                app->overlay.update(app->meetings);
+                app->overlay.update(overlayMeetings(app));
             else if (wParam == kKeepAwakeTimer) keepAwakeTick();
             else if (wParam == kPopupTimer && !app->popupGrip.dragging()) popupTick(app);
             else if (wParam == kHoverTimer) hoverTick(app);
@@ -218,6 +269,9 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         case WM_APP_GRIP_MOVED:
             onGripMoved(app, wParam);
+            return 0;
+        case WM_APP_OVERLAY_DISMISS:
+            onOverlayDismiss(app, (size_t)wParam);
             return 0;
         case WM_APP_AUTH_DONE:
             app->authInFlight = false;
@@ -237,6 +291,7 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             keepAwakeStop();
             app->overlayGrip.destroy();
             app->popupGrip.destroy();
+            app->dismissStrip.destroy();
             app->overlay.destroy();
             app->popup.destroy();
             PostQuitMessage(0);
@@ -286,6 +341,7 @@ App* createAppWindow(HINSTANCE inst) {
     }
     app->overlayGrip.init(inst, hwnd, WM_APP_GRIP_MOVED, kGripOverlay);
     app->popupGrip.init(inst, hwnd, WM_APP_GRIP_MOVED, kGripPopup);
+    app->dismissStrip.init(inst, hwnd, WM_APP_OVERLAY_DISMISS);
 
     // Dragged positions from the last session; an anchor whose corner no
     // longer lands on any monitor (undocked screen) falls back to default.
@@ -300,7 +356,7 @@ App* createAppWindow(HINSTANCE inst) {
 
     trayAdd(hwnd, WM_APP_TRAY);
     keepAwakeStart();
-    app->overlay.update(app->meetings);
+    app->overlay.update(overlayMeetings(app));
 
     SetTimer(hwnd, kRefreshTimer, kRefreshIntervalMs, nullptr);
     SetTimer(hwnd, kOverlayTimer, kOverlayIntervalMs, nullptr);
