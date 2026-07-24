@@ -45,10 +45,16 @@ void DismissStrip::showFor(HWND host, const std::vector<OverlayRow>& rows) {
     if (!hwnd_ || !host || rows.empty()) return;
     RECT hr{};
     if (!GetWindowRect(host, &hr)) return;
-    if (visible() && EqualRect(&hr, &lastHostRect_) && rows.size() == rows_.size())
-        return;
+    // Same rect + same row COUNT is not enough: a right-anchored badge can
+    // swap meeting sets without changing size, which would leave stale keys
+    // behind the ✕s — compare the keys too.
+    bool same = visible() && EqualRect(&hr, &lastHostRect_) && rows.size() == rows_.size();
+    for (size_t i = 0; same && i < rows.size(); ++i)
+        same = rows[i].startUtc == rows_[i].startUtc && rows[i].subject == rows_[i].subject;
+    if (same) return;
     lastHostRect_ = hr;
     rows_ = rows;
+    pressedRow_ = -1;
 
     const float scale = (float)GetDpiForWindow(host) / 96.f;
     const int width = (int)(kStripW * scale + 0.5f);
@@ -56,7 +62,11 @@ void DismissStrip::showFor(HWND host, const std::vector<OverlayRow>& rows) {
     lastWidth_ = width;
 
     render(width, height, scale);
-    SetWindowPos(hwnd_, HWND_TOPMOST, hr.left - width, hr.top, width, height,
+    // Overlap the host when flush-left would land off the virtual screen
+    // (badge dragged to the far left edge), same clamp as the grip.
+    int x = hr.left - width;
+    if (x < GetSystemMetrics(SM_XVIRTUALSCREEN)) x = hr.left;
+    SetWindowPos(hwnd_, HWND_TOPMOST, x, hr.top, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
 
@@ -123,6 +133,7 @@ void DismissStrip::render(int width, int height, float scale) {
 void DismissStrip::hide() {
     if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
     rows_.clear();
+    pressedRow_ = -1;
 }
 
 bool DismissStrip::visible() const {
@@ -150,9 +161,15 @@ int DismissStrip::rowAt(LPARAM lParam) const {
 
 LRESULT DismissStrip::onMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_LBUTTONDOWN:
+        pressedRow_ = rowAt(lParam);
+        return 0;
     case WM_LBUTTONUP: {
+        // Click contract: down and up on the same row, else ignore.
         const int row = rowAt(lParam);
-        if (row >= 0) PostMessageW(notifyWnd_, notifyMsg_, (WPARAM)row, 0);
+        if (row >= 0 && row == pressedRow_)
+            PostMessageW(notifyWnd_, notifyMsg_, (WPARAM)row, 0);
+        pressedRow_ = -1;
         return 0;
     }
     case WM_MOUSEACTIVATE:

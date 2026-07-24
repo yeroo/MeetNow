@@ -25,7 +25,9 @@ public:
     int widthPx() const { return lastWidth_; }
 
     // The meeting key behind a clicked ✕ (index from the posted message);
-    // false when the strip re-rendered since and the index is stale.
+    // false when the index is out of range. Staleness is prevented by the
+    // callers: posted clicks drain before the timers that re-render, and
+    // hide() clears the rows.
     bool rowKey(size_t index, unsigned long long* startUtc, std::wstring* subject) const;
 
 private:
@@ -39,6 +41,7 @@ private:
     UINT notifyMsg_ = 0;
     RECT lastHostRect_{};
     int lastWidth_ = 0;
+    int pressedRow_ = -1;  // row under the last WM_LBUTTONDOWN, else -1
     std::vector<OverlayRow> rows_;
 };
 

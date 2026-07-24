@@ -252,6 +252,9 @@ void Overlay::render(const std::vector<const Meeting*>& upcoming) {
 
     const RECT rc{ 0, 0, width, height };
     bool drawn = false;
+    // Staged into rows_ only when the frame actually reaches the screen,
+    // so the dismiss strip never hit-tests rows the user can't see.
+    std::vector<OverlayRow> newRows;
     if (SUCCEEDED(d2d_->rt->BindDC(memDc, &rc))) {
         d2d_->rt->BeginDraw();
         d2d_->rt->Clear(D2D1::ColorF(0, 0, 0, 0));
@@ -268,10 +271,10 @@ void Overlay::render(const std::vector<const Meeting*>& upcoming) {
             float y = metrics::kPadT * scale;
             const float xTime = metrics::kPadL * scale;
             const float xSubj = xTime + (metrics::kTimeColW + metrics::kSubjMarginL) * scale;
-            rows_.clear();
+            newRows.clear();
             for (size_t i = 0; i < rows.size(); ++i) {
                 const auto& row = rows[i];
-                rows_.push_back({ y, row.height, upcoming[i]->startUtc, upcoming[i]->subject });
+                newRows.push_back({ y, row.height, upcoming[i]->startUtc, upcoming[i]->subject });
                 brush->SetColor(row.time.color);
                 d2d_->rt->DrawTextLayout({ xTime, y }, row.time.layout.Get(), brush.Get());
                 brush->SetColor(row.subj.color);
@@ -300,6 +303,7 @@ void Overlay::render(const std::vector<const Meeting*>& upcoming) {
         BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
         UpdateLayeredWindow(hwnd_, nullptr, &dst, &size, memDc, &src, 0, &blend, ULW_ALPHA);
         ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+        rows_ = std::move(newRows);
     }
 
     SelectObject(memDc, old);
