@@ -14,6 +14,10 @@ constexpr wchar_t kMainClass[] = L"MeetNowMain";
 constexpr UINT WM_APP_TRAY = WM_APP + 1;
 constexpr UINT WM_APP_REFRESHED = WM_APP + 2;  // lParam: heap RefreshResult*
 constexpr UINT WM_APP_AUTH_DONE = WM_APP + 3;  // wParam: success
+constexpr UINT WM_APP_GRIP_MOVED = WM_APP + 4; // wParam: kGripOverlay/kGripPopup
+
+constexpr WPARAM kGripOverlay = 0;
+constexpr WPARAM kGripPopup = 1;
 
 // Intervals from the C# app: OUTLOOK_TIMER_INTERVAL_MINUTES = 15, overlay
 // query/render timers 30 s, ScreenLockPrevention timer 60 s.
@@ -31,6 +35,10 @@ constexpr UINT kPopupIntervalMs = 1000;
 // The popup covers [start, start+5 min): shown when start passes, auto-
 // closed 5 min in — SchedulePopup / SchedulePopupClose(start.AddMinutes(5)).
 constexpr unsigned long long kPopupWindowTicks = 5 * kTicksPerMinute;
+// Cursor polling for the drag grips: the overlay is click-through, so
+// hover can't arrive as a mouse message — it has to be polled.
+constexpr UINT_PTR kHoverTimer = 5;
+constexpr UINT kHoverIntervalMs = 150;
 
 struct ThreadArgs {
     HWND hwnd;
@@ -120,6 +128,51 @@ void popupTick(App* app) {
     app->popup.show(due, earliestStart + kPopupWindowTicks);
 }
 
+// One host window's share of the hover tick: show its grip while the
+// cursor is over the host or the grip itself, hide it otherwise.
+void hoverFor(HWND host, bool hostVisible, const RECT& hostRect, DragGrip& grip,
+              const POINT& cursor) {
+    if (grip.dragging()) return;
+    if (!hostVisible) {
+        grip.hide();
+        return;
+    }
+    bool over = PtInRect(&hostRect, cursor) != 0;
+    RECT gr{};
+    if (!over && grip.getRect(&gr)) over = PtInRect(&gr, cursor) != 0;
+    if (over)
+        grip.showFor(host);  // no-op while already aligned to hostRect
+    else
+        grip.hide();
+}
+
+void hoverTick(App* app) {
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    RECT r{};
+    bool vis = app->overlay.getRect(&r);
+    hoverFor(app->overlay.handle(), vis, r, app->overlayGrip, cursor);
+    vis = app->popup.getRect(&r);
+    hoverFor(app->popup.handle(), vis, r, app->popupGrip, cursor);
+}
+
+// A grip drag ended: re-anchor the host to its dragged corner and persist.
+void onGripMoved(App* app, WPARAM which) {
+    RECT r{};
+    if (which == kGripOverlay && app->overlay.getRect(&r)) {
+        app->layout.hasOverlay = true;
+        app->layout.overlayTopRight = { r.right, r.top };
+        app->overlay.setAnchor(app->layout.overlayTopRight);
+    } else if (which == kGripPopup && app->popup.getRect(&r)) {
+        app->layout.hasPopup = true;
+        app->layout.popupBottomRight = { r.right, r.bottom };
+        app->popup.setAnchor(app->layout.popupBottomRight);
+    } else {
+        return;
+    }
+    saveLayout(app->layout);
+}
+
 void onTray(App* app, LPARAM lParam) {
     // NOTIFYICON_VERSION_4 packs the event in LOWORD(lParam).
     const UINT event = LOWORD(lParam);
@@ -149,15 +202,22 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
         case WM_TIMER:
             if (wParam == kRefreshTimer) startRefresh(app);
-            else if (wParam == kOverlayTimer) app->overlay.update(app->meetings);
+            // A repaint or auto-close would yank the window mid-drag, so
+            // both stand down while their grip is captured.
+            else if (wParam == kOverlayTimer && !app->overlayGrip.dragging())
+                app->overlay.update(app->meetings);
             else if (wParam == kKeepAwakeTimer) keepAwakeTick();
-            else if (wParam == kPopupTimer) popupTick(app);
+            else if (wParam == kPopupTimer && !app->popupGrip.dragging()) popupTick(app);
+            else if (wParam == kHoverTimer) hoverTick(app);
             return 0;
         case WM_APP_TRAY:
             onTray(app, lParam);
             return 0;
         case WM_APP_REFRESHED:
             onRefreshed(app, (RefreshResult*)lParam);
+            return 0;
+        case WM_APP_GRIP_MOVED:
+            onGripMoved(app, wParam);
             return 0;
         case WM_APP_AUTH_DONE:
             app->authInFlight = false;
@@ -175,6 +235,8 @@ LRESULT CALLBACK mainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_DESTROY:
             trayRemove(hwnd);
             keepAwakeStop();
+            app->overlayGrip.destroy();
+            app->popupGrip.destroy();
             app->overlay.destroy();
             app->popup.destroy();
             PostQuitMessage(0);
@@ -222,6 +284,20 @@ App* createAppWindow(HINSTANCE inst) {
     if (!app->popup.init(inst)) {
         // Same stance: no popup is a degraded mode, not a startup failure.
     }
+    app->overlayGrip.init(inst, hwnd, WM_APP_GRIP_MOVED, kGripOverlay);
+    app->popupGrip.init(inst, hwnd, WM_APP_GRIP_MOVED, kGripPopup);
+
+    // Dragged positions from the last session; an anchor whose corner no
+    // longer lands on any monitor (undocked screen) falls back to default.
+    app->layout = loadLayout();
+    const auto onScreen = [](POINT p) {
+        return MonitorFromPoint(p, MONITOR_DEFAULTTONULL) != nullptr;
+    };
+    if (app->layout.hasOverlay && onScreen(app->layout.overlayTopRight))
+        app->overlay.setAnchor(app->layout.overlayTopRight);
+    if (app->layout.hasPopup && onScreen(app->layout.popupBottomRight))
+        app->popup.setAnchor(app->layout.popupBottomRight);
+
     trayAdd(hwnd, WM_APP_TRAY);
     keepAwakeStart();
     app->overlay.update(app->meetings);
@@ -230,6 +306,7 @@ App* createAppWindow(HINSTANCE inst) {
     SetTimer(hwnd, kOverlayTimer, kOverlayIntervalMs, nullptr);
     SetTimer(hwnd, kKeepAwakeTimer, kKeepAwakeIntervalMs, nullptr);
     SetTimer(hwnd, kPopupTimer, kPopupIntervalMs, nullptr);
+    SetTimer(hwnd, kHoverTimer, kHoverIntervalMs, nullptr);
     // Starting the app inside a meeting's popup window pops immediately,
     // like FluentScheduler firing an overdue ToRunOnceAt job on schedule.
     popupTick(app);

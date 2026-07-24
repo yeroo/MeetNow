@@ -60,6 +60,7 @@
     <ClCompile Include="tray.cpp" />
     <ClCompile Include="overlay.cpp" />
     <ClCompile Include="popup.cpp" />
+    <ClCompile Include="grip.cpp" />
     <ClCompile Include="app_window.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -75,6 +76,7 @@
     <ClInclude Include="tray.h" />
     <ClInclude Include="overlay.h" />
     <ClInclude Include="popup.h" />
+    <ClInclude Include="grip.h" />
     <ClInclude Include="app_window.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>

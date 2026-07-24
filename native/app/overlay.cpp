@@ -280,13 +280,15 @@ void Overlay::render(const std::vector<const Meeting*>& upcoming) {
     }
 
     if (drawn) {
-        // Top-right of the primary work area, 12 DIPs off both edges
-        // (WorkArea.Right - width - 12 / WorkArea.Top + 12 in the C# code).
+        // Dragged anchor when set, else top-right of the primary work
+        // area, 12 DIPs off both edges (WorkArea.Right - width - 12 /
+        // WorkArea.Top + 12 in the C# code).
         MONITORINFO mi{ sizeof(mi) };
         POINT origin{ 0, 0 };
         GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi);
         POINT dst{ mi.rcWork.right - width - (int)(metrics::kEdgeMargin * scale),
                    mi.rcWork.top + (int)(metrics::kEdgeMargin * scale) };
+        if (customPos_) dst = { anchor_.x - width, anchor_.y };
         POINT src{ 0, 0 };
         SIZE size{ width, height };
         BLENDFUNCTION blend{ AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
